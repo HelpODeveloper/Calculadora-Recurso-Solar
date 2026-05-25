@@ -19,8 +19,9 @@
 
   <!-- Chart.js via CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <!-- SheetJS via CDN para descargas de Excel offline sin backend -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- ExcelJS y FileSaver para descargas de Excel estilizadas profesionales offline -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 
   <style>
     /* Overrides para integrar con Tessellate */
@@ -83,14 +84,6 @@
       resolución quinceminutal usando el modelo simplificado de Jensen.
       Backend Python — Frontend interactivo.
     </p>
-    <div class="hero-actions">
-      <button class="btn btn-primary" onclick="scrollTo('guia')">
-        <span>📋</span> Ver Guía de Datos
-      </button>
-      <button class="btn btn-secondary" onclick="scrollTo('demanda')">
-        <span>⚡</span> Comenzar Análisis
-      </button>
-    </div>
   </div>
 </section>
 

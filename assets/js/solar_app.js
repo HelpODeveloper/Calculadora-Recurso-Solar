@@ -1060,7 +1060,7 @@ function renderSolarStats(stats, balance) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CLIENT-SIDE EXCEL EXPORT (CON SHEETJS / XLSX)
+// CLIENT-SIDE EXCEL EXPORT CON EXCELJS (TEMA EN NARANJA PASTEL)
 // ─────────────────────────────────────────────────────────────────────────────
 function downloadExcel() {
   if (!state.solarData) {
@@ -1068,179 +1068,397 @@ function downloadExcel() {
     return;
   }
   
-  showLoader('📊 Generando reporte Excel de alta fidelidad (35,040 filas)...');
+  showLoader('📊 Generando reporte Excel en Naranja Pastel (35,040 filas)...');
   
   setTimeout(() => {
     try {
-      const wb = XLSX.utils.book_new();
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'Jensen Solar Engine';
+      workbook.created = new Date();
+      
       const s = state.solarData.stats;
       const b = state.solarData.balance;
+      
+      // Paleta de Colores Naranja Pastel (Pastel Orange Theme)
+      const colors = {
+        titleText: '7C2D12',     // Marrón/Naranja óxido para títulos (alta legibilidad)
+        catFill: 'FED7AA',       // Naranja pastel medio (Orange 200) para secciones principales
+        catText: '7C2D12',
+        hdrFill: 'FFEDD5',       // Naranja pastel suave (Orange 100) para subencabezados de columnas
+        hdrText: '9A3412',       // Naranja óxido medio para texto de columnas
+        evenRow: 'FFFBF7',       // Crema/Naranja extremadamente tenue para filas pares
+        oddRow: 'FFFFFF',        // Blanco puro para filas impares
+        borderThin: 'FED7AA',    // Borde naranja pastel fino
+        borderThick: 'F97316'    // Borde naranja principal
+      };
 
-      // ── Hoja 1: Parámetros ──
-      const paramData = [
-        ["Motor Solar Fotovoltaico — Parámetros de Simulación"],
-        [],
-        ["PARÁMETRO", "VALOR", "UNIDAD"],
-        ["SISTEMA FOTOVOLTAICO", "", ""],
-        ["Latitud", s.lat, "°"],
-        ["Longitud", s.lon, "°"],
-        ["Altitud del Sitio", s.alt, "m s.n.m."],
-        ["Eficiencia del Panel (η)", s.eta, "fracción"],
-        ["Área Frontal de un Panel", s.area_m2, "m²"],
-        ["Potencia Nominal Unitario", s.potencia_nominal_W_panel, "W"],
-        ["Cantidad de Módulos (N)", s.n_paneles, "paneles"],
-        ["Potencia Pico Total Instalada", s.p_nominal_total_kW, "kWp"],
-        ["Inclinación de Módulos (Tilt)", s.tilt, "°"],
-        ["Orientación Azimutal (Azimut)", s.azimuth, "° (Sur = 180°)"],
-        []
+      const styleTitle = (cell, text, size = 14) => {
+        cell.value = text;
+        cell.font = { name: 'Calibri', size, bold: true, color: { argb: colors.titleText } };
+        cell.alignment = { vertical: 'middle' };
+      };
+
+      const styleCategoryHeader = (row, startCol, endCol, text) => {
+        row.getCell(startCol).value = text;
+        for (let i = startCol; i <= endCol; i++) {
+          const cell = row.getCell(i);
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.catFill } };
+          cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: colors.catText } };
+          cell.alignment = { horizontal: 'left', vertical: 'middle' };
+          cell.border = {
+            top: { style: 'thin', color: { argb: colors.borderThin } },
+            bottom: { style: 'thin', color: { argb: colors.borderThin } }
+          };
+        }
+      };
+
+      const styleTableHeader = (row, columns) => {
+        columns.forEach((val, idx) => {
+          const cell = row.getCell(idx + 1);
+          cell.value = val;
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.hdrFill } };
+          cell.font = { name: 'Calibri', size: 9, bold: true, color: { argb: colors.hdrText } };
+          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+          cell.border = {
+            top: { style: 'thin', color: { argb: colors.borderThin } },
+            bottom: { style: 'medium', color: { argb: colors.borderThick } },
+            left: { style: 'thin', color: { argb: colors.borderThin } },
+            right: { style: 'thin', color: { argb: colors.borderThin } }
+          };
+        });
+      };
+
+      const addDataRow = (sheet, vals, isEven, aligns = [], numFmts = []) => {
+        const row = sheet.addRow(vals);
+        row.height = 18;
+        vals.forEach((_, idx) => {
+          const cell = row.getCell(idx + 1);
+          const align = aligns[idx] || 'center';
+          const numFmt = numFmts[idx] || null;
+          
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isEven ? colors.evenRow : colors.oddRow } };
+          cell.font = { name: 'Calibri', size: 9, color: { argb: '1F2937' } };
+          cell.alignment = { horizontal: align, vertical: 'middle' };
+          cell.border = {
+            top: { style: 'thin', color: { argb: colors.borderThin } },
+            bottom: { style: 'thin', color: { argb: colors.borderThin } },
+            left: { style: 'thin', color: { argb: colors.borderThin } },
+            right: { style: 'thin', color: { argb: colors.borderThin } }
+          };
+          if (numFmt) {
+            cell.numFmt = numFmt;
+          }
+        });
+        return row;
+      };
+
+      const autofitColumns = (sheet) => {
+        sheet.columns.forEach((column) => {
+          let maxLength = 0;
+          column.eachCell({ includeEmpty: true }, (cell) => {
+            const val = cell.value;
+            let len = 0;
+            if (val !== null && val !== undefined) {
+              if (typeof val === 'object' && val.richText) {
+                len = val.richText.reduce((acc, curr) => acc + curr.text.length, 0);
+              } else {
+                len = val.toString().length;
+              }
+            }
+            if (len > maxLength) maxLength = len;
+          });
+          column.width = Math.max(maxLength + 4, 12);
+        });
+      };
+
+      // ══════════════════════════════════════════════════════════════════════════
+      // HOJA 1: Parámetros
+      // ══════════════════════════════════════════════════════════════════════════
+      const ws1 = workbook.addWorksheet('1. Parámetros');
+      ws1.views = [{ showGridLines: true }];
+      
+      const t1 = ws1.addRow([]);
+      t1.height = 30;
+      styleTitle(t1.getCell(1), 'Motor Solar Fotovoltaico — Parámetros de Simulación', 13);
+      ws1.addRow([]); // Espacio
+
+      // Categoría: Sistema PV
+      const c1 = ws1.addRow([]);
+      c1.height = 20;
+      styleCategoryHeader(c1, 1, 3, ' ── SISTEMA FOTOVOLTAICO');
+      
+      const h1 = ws1.addRow([]);
+      h1.height = 20;
+      styleTableHeader(h1, ['PARÁMETRO', 'VALOR DE ENTRADA', 'UNIDAD']);
+      
+      const pvParams = [
+        ['Latitud del Emplazamiento', s.lat, '° (Positivo = Norte)'],
+        ['Longitud del Emplazamiento', s.lon, '° (Positivo = Este)'],
+        ['Altitud sobre el nivel del mar', s.alt, 'm s.n.m.'],
+        ['Eficiencia del Módulo Fotovoltaico (η)', s.eta, 'fracción decimal'],
+        ['Área Superficial Frontal de un Panel', s.area_m2, 'm²'],
+        ['Potencia Nominal de Placa Unitario', s.potencia_nominal_W_panel, 'W'],
+        ['Cantidad Total de Módulos (N)', s.n_paneles, 'paneles'],
+        ['Potencia Pico Total Instalada', s.p_nominal_total_kW, 'kWp'],
+        ['Inclinación de los Módulos (Tilt)', s.tilt, '° (Respecto a horizontal)'],
+        ['Orientación Azimutal de los Módulos', s.azimuth, '° (Norte = 0°, Sur = 180°)']
       ];
+      
+      pvParams.forEach((p, idx) => {
+        const isEven = idx % 2 === 0;
+        const fmts = [null, typeof p[1] === 'number' ? '0.00' : null, null];
+        if (p[0].includes('Cantidad')) fmts[1] = '#,##0';
+        addDataRow(ws1, p, isEven, ['left', 'right', 'left'], fmts);
+      });
+      
+      ws1.addRow([]); // Espacio
 
       if (state.demandData) {
         const ds = state.demandData.stats;
-        paramData.push(
-          ["PERFIL DE DEMANDA INDUSTRIAL", "", ""],
-          ["Tipo de Planta/Industria", ds.plant_name, "—"],
-          ["Demanda Máxima Configurada (Pmax)", ds.pmax_kW, "kW"],
-          ["Turnos de Operación Diarios", ds.n_shifts, "turnos"],
-          ["Factor de Carga Teórico (FC)", ds.FC_planta, "fracción"],
-          ["Factor de Potencia de Planta (FP)", ds.FP_potencia, "—"],
-          ["Factor de Operación Fin de Semana", ds.weekend_op_factor, "fracción"],
-          ["Multiplicador de Consumo en Verano", ds.summer_boost, "multiplicador"]
-        );
+        
+        // Categoría: Demanda Industrial
+        const c2 = ws1.addRow([]);
+        c2.height = 20;
+        styleCategoryHeader(c2, 1, 3, ' ── DEMANDA INDUSTRIAL DE PLANTA');
+        
+        const h2 = ws1.addRow([]);
+        h2.height = 20;
+        styleTableHeader(h2, ['PARÁMETRO', 'VALOR DE ENTRADA', 'UNIDAD']);
+        
+        const demParams = [
+          ['Tipo de Industria / Curva Base', ds.plant_name, '—'],
+          ['Demanda Máxima Configurada (Pmax)', ds.pmax_kW, 'kW'],
+          ['Turnos Diarios de Operación', ds.n_shifts, 'turnos'],
+          ['Factor de Carga Teórico (FC)', ds.FC_planta, 'fracción decimal'],
+          ['Factor de Potencia de Planta (FP)', ds.FP_potencia, '—'],
+          ['Factor de Ajuste de Fin de Semana', ds.weekend_op_factor, 'fracción decimal'],
+          ['Multiplicador Estacional de Verano', ds.summer_boost, 'multiplicador']
+        ];
+        
+        demParams.forEach((p, idx) => {
+          const isEven = idx % 2 === 0;
+          const fmts = [null, typeof p[1] === 'number' ? '0.00' : null, null];
+          addDataRow(ws1, p, isEven, ['left', 'right', 'left'], fmts);
+        });
       }
-      const ws1 = XLSX.utils.aoa_to_sheet(paramData);
-      XLSX.utils.book_append_sheet(wb, ws1, "1. Parámetros");
+      
+      autofitColumns(ws1);
 
-      // ── Hoja 2: KPIs Globales ──
-      const kpis = [
-        ["Métricas e Indicadores Clave de Rendimiento (KPIs)"],
-        [],
-        ["Métrica", "Valor", "Unidad", "Descripción"],
-        ["Energía PV Anual Generada", s.energia_anual_kWh, "kWh/año", "Generación eléctrica total acumulada en el año simulado."],
-        ["Factor de Capacidad Solar", s.factor_capacidad_pct, "%", "Aprovechamiento real del arreglo respecto a su potencia pico máxima."],
-        ["Potencia Máxima Instantánea Generada", s.p_max_kW, "kW", "Pico absoluto registrado de potencia generada."],
-        ["Irradiación Horizontal Anual", s.irrad_horizontal_kWh_m2, "kWh/m²", "Recurso solar total disponible en plano plano horizontal."],
-        ["Irradiación en Plano POA Anual", s.irrad_poa_kWh_m2, "kWh/m²", "Recurso solar captado por el plano inclinado de los módulos (modelo de Jensen)."],
-        ["Horas Pico Solar Equivalentes (HPSE)", s.horas_pico_sol_equiv, "horas/año", "Número de horas que el panel recibiría irradiancia constante de 1000 W/m²."],
-        ["Horas con Generación Activa", s.n_horas_generacion, "horas/año", "Cantidad de horas al año en las que la generación PV es mayor a cero."]
+      // ══════════════════════════════════════════════════════════════════════════
+      // HOJA 2: KPIs de Rendimiento
+      // ══════════════════════════════════════════════════════════════════════════
+      const ws2 = workbook.addWorksheet('2. KPIs');
+      ws2.views = [{ showGridLines: true }];
+      
+      const t2 = ws2.addRow([]);
+      t2.height = 30;
+      styleTitle(t2.getCell(1), 'Métricas e Indicadores Clave de Rendimiento (KPIs)', 13);
+      ws2.addRow([]); // Espacio
+      
+      const c2_1 = ws2.addRow([]);
+      c2_1.height = 20;
+      styleCategoryHeader(c2_1, 1, 4, ' ── INDICADORES GENERALES DEL SISTEMA SOLAR');
+      
+      const h2_1 = ws2.addRow([]);
+      h2_1.height = 20;
+      styleTableHeader(h2_1, ['MÉTRICA / INDICADOR', 'VALOR', 'UNIDAD', 'DESCRIPCIÓN OPERATIVA']);
+      
+      const kpisSolar = [
+        ['Energía Anual Generada', s.energia_anual_kWh, 'kWh/año', 'Generación eléctrica acumulada integrable durante los 365 días.'],
+        ['Factor de Capacidad Solar', s.factor_capacidad_pct / 100, '%', 'Aprovechamiento real del arreglo respecto a operar 24/7 a máxima capacidad.'],
+        ['Potencia Máxima Instantánea Generada', s.p_max_kW, 'kW', 'Pico absoluto registrado en el inversor durante el año.'],
+        ['Irradiación Horizontal Anual', s.irrad_horizontal_kWh_m2, 'kWh/m²/año', 'Recurso de irradiancia global acumulado sobre superficie horizontal.'],
+        ['Irradiación POA Anual (Jensen)', s.irrad_poa_kWh_m2, 'kWh/m²/año', 'Recurso de irradiancia POA captado por la inclinación de los módulos.'],
+        ['Horas Pico Solar Equivalentes (HPSE)', s.horas_pico_sol_equiv, 'horas/año', 'Horas de sol teóricas a irradiancia constante de 1,000 W/m².'],
+        ['Horas con Generación Activa', s.n_horas_generacion, 'horas/año', 'Horas anuales efectivas de inyección eléctrica (generación > 0).']
       ];
-
+      
+      kpisSolar.forEach((p, idx) => {
+        const isEven = idx % 2 === 0;
+        const fmt = p[0].includes('Factor') ? '0.0%' : '#,##0.0';
+        addDataRow(ws2, p, isEven, ['left', 'right', 'center', 'left'], [null, fmt, null, null]);
+      });
+      
       if (b) {
-        kpis.push(
-          [],
-          ["INDICADORES DE ACOPLAMIENTO DE CARGA Y BALANCE", "", "", ""],
-          ["Energía Anual Consumida por Planta", b.energia_demanda_kWh, "kWh/año", "Consumo total de electricidad en el año."],
-          ["Porcentaje de Cobertura Solar Anual", b.cobertura_pct, "%", "Fracción de la demanda anual total cubierta por la generación solar."],
-          ["Exceso Solar Exportable", b.exceso_kWh, "kWh/año", "Energía generada que sobrepasa el consumo instantáneo de la planta."],
-          ["Déficit Neto de Red", b.deficit_kWh, "kWh/año", "Energía que no pudo ser suministrada por el sistema solar y debe comprarse a CFE."]
-        );
+        ws2.addRow([]); // Espacio
+        
+        const c2_2 = ws2.addRow([]);
+        c2_2.height = 20;
+        styleCategoryHeader(c2_2, 1, 4, ' ── BALANCE DE ACOPLAMIENTO CON LA PLANTA');
+        
+        const h2_2 = ws2.addRow([]);
+        h2_2.height = 20;
+        styleTableHeader(h2_2, ['MÉTRICA / INDICADOR', 'VALOR', 'UNIDAD', 'DESCRIPCIÓN OPERATIVA']);
+        
+        const kpisBalance = [
+          ['Consumo Total de Planta Industrial', b.energia_demanda_kWh, 'kWh/año', 'Consumo energético anual calculado de la planta.'],
+          ['Porcentaje de Cobertura Solar Anual', b.cobertura_pct / 100, '%', 'Fracción de la demanda total cubierta de forma neta por generación solar.'],
+          ['Exceso Solar Exportable', b.exceso_kWh, 'kWh/año', 'Excedentes que superan la demanda instantánea y se inyectan a red.'],
+          ['Déficit Neto de Red', b.deficit_kWh, 'kWh/año', 'Energía faltante de CFE requerida para suplir los consumos industriales.']
+        ];
+        
+        kpisBalance.forEach((p, idx) => {
+          const isEven = idx % 2 === 0;
+          const fmt = p[0].includes('Cobertura') ? '0.0%' : '#,##0.0';
+          addDataRow(ws2, p, isEven, ['left', 'right', 'center', 'left'], [null, fmt, null, null]);
+        });
       }
-      const ws2 = XLSX.utils.aoa_to_sheet(kpis);
-      XLSX.utils.book_append_sheet(wb, ws2, "2. KPIs de Rendimiento");
+      
+      autofitColumns(ws2);
 
-      // ── Hoja 3: Resumen Mensual ──
-      const monthlyHeaders = ["Mes", "Irradiación POA Media [W/m²]", "Irradiación POA Max [W/m²]", "Generación PV [kWh]"];
+      // ══════════════════════════════════════════════════════════════════════════
+      // HOJA 3: Resumen Mensual
+      // ══════════════════════════════════════════════════════════════════════════
+      const ws3 = workbook.addWorksheet('3. Resumen Mensual');
+      ws3.views = [{ showGridLines: true }];
+      
+      const t3 = ws3.addRow([]);
+      t3.height = 30;
+      styleTitle(t3.getCell(1), 'Resumen Mensualizado de Generación y Recurso', 13);
+      ws3.addRow([]); // Espacio
+      
+      const headers3 = ['MES', 'IRRAD. POA MEDIA [W/m²]', 'IRRAD. POA MÁX [W/m²]', 'GENERACIÓN PV [kWh]'];
       if (state.demandData) {
-        monthlyHeaders.push("Consumo Planta [kWh]", "Balance Neto [kWh]", "Cobertura Mensual [%]");
+        headers3.push('CONSUMO PLANTA [kWh]', 'BALANCE EXCEDENTE [kWh]', 'COBERTURA SOLAR [%]');
       }
-      const monthlyRows = [monthlyHeaders];
-      const MONTH_NAMES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+      
+      const h3 = ws3.addRow([]);
+      h3.height = 20;
+      styleTableHeader(h3, headers3);
+      
+      const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+      const aligns3 = ['left', 'right', 'right', 'right', 'right', 'right', 'right'];
+      const fmts3 = [null, '#,##0.0', '#,##0.0', '#,##0', '#,##0', '#,##0', '0.0%'];
       
       for (let m = 0; m < 12; m++) {
-        const row = [
+        const rowVals = [
           MONTH_NAMES[m],
           state.solarData.monthly_gtot_avg[m],
           state.solarData.monthly_gtot_max[m],
           state.solarData.monthly_gen_kWh[m]
         ];
         if (state.demandData) {
-          const days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m];
-          const dem_kwh = state.demandData.monthly_kWh[m];
-          row.push(dem_kwh, b.monthly_balance[m], b.monthly_cobertura[m]);
+          rowVals.push(
+            state.demandData.monthly_kWh[m],
+            b.monthly_balance[m],
+            b.monthly_cobertura[m] / 100.0
+          );
         }
-        monthlyRows.push(row);
+        addDataRow(ws3, rowVals, m % 2 === 0, aligns3, fmts3);
       }
-      const ws3 = XLSX.utils.aoa_to_sheet(monthlyRows);
-      XLSX.utils.book_append_sheet(wb, ws3, "3. Resumen Mensual");
 
-      // ── Hoja 4: Perfil Diario Promedio en Verano ──
-      const dailyHeaders = ["Intervalo", "Hora", "Irradiación POA Promedio [W/m²]", "Generación PV Promedio [kW]"];
-      if (state.demandData) {
-        dailyHeaders.push("Demanda Industrial típica [kW]");
-      }
-      const dailyRows = [dailyHeaders];
+      autofitColumns(ws3);
+
+      // ══════════════════════════════════════════════════════════════════════════
+      // HOJA 4: Perfil Diario Promedio en Verano
+      // ══════════════════════════════════════════════════════════════════════════
+      const ws4 = workbook.addWorksheet('4. Perfil Diario Verano');
+      ws4.views = [{ showGridLines: true }];
+
+      const t4 = ws4.addRow([]);
+      t4.height = 30;
+      styleTitle(t4.getCell(1), 'Perfil de Carga y Generación Diario (Promedio Mayo–Agosto)', 13);
+      ws4.addRow([]);
+
+      const headers4 = ['INTERVALO', 'HORA', 'IRRAD. POA PROMEDIO [W/m²]', 'POTENCIA PV PROMEDIO [kW]'];
+      if (state.demandData) headers4.push('DEMANDA PLANTA [kW]');
+
+      const h4 = ws4.addRow([]);
+      h4.height = 20;
+      styleTableHeader(h4, headers4);
+
+      const aligns4 = ['center', 'center', 'right', 'right', 'right'];
+      const fmts4   = [null, null, '#,##0.0', '#,##0.00', '#,##0.00'];
+
       for (let i = 0; i < 96; i++) {
-        const row = [
+        const rowVals4 = [
           i + 1,
           HOURS_96[i],
           state.solarData.daily_gtot_summer[i],
           state.solarData.daily_p_summer[i]
         ];
-        if (state.demandData) {
-          row.push(state.demandData.daily_weekday[i]);
-        }
-        dailyRows.push(row);
+        if (state.demandData) rowVals4.push(state.demandData.daily_weekday[i]);
+        addDataRow(ws4, rowVals4, i % 2 === 0, aligns4, fmts4);
       }
-      const ws4 = XLSX.utils.aoa_to_sheet(dailyRows);
-      XLSX.utils.book_append_sheet(wb, ws4, "4. Perfil Diario Verano");
 
-      // ── Hoja 5: Datos Crudos Anuales (35,040 Filas) ──
-      const annualHeaders = ["Punto", "Fecha y Hora", "Día del Año", "Irradiación POA [W/m²]", "Generación PV [kW]"];
-      if (state.demandData) {
-        annualHeaders.push("Demanda Industrial [kW]", "Balance Solar - Demanda [kW]");
-      }
-      const annualRows = [annualHeaders];
+      autofitColumns(ws4);
+
+      // ══════════════════════════════════════════════════════════════════════════
+      // HOJA 5: Datos Crudos Anuales (35,040 filas)
+      // ══════════════════════════════════════════════════════════════════════════
+      const ws5 = workbook.addWorksheet('5. Datos Crudos Anuales');
+      ws5.views = [{ showGridLines: true }];
+
+      const t5 = ws5.addRow([]);
+      t5.height = 30;
+      styleTitle(t5.getCell(1), 'Simulación Completa Anual — Resolución Quinceminutal (15 min)', 13);
+      ws5.addRow([]);
+
+      const headers5 = ['PUNTO', 'FECHA Y HORA', 'DÍA DEL AÑO', 'IRRAD. POA [W/m²]', 'POTENCIA PV [kW]'];
+      if (state.demandData) headers5.push('DEMANDA PLANTA [kW]', 'BALANCE NETO [kW]');
+
+      const h5 = ws5.addRow([]);
+      h5.height = 20;
+      styleTableHeader(h5, headers5);
+
+      const aligns5 = ['center', 'center', 'center', 'right', 'right', 'right', 'right'];
+      const fmts5   = [null, null, null, '#,##0.0', '#,##0.00', '#,##0.00', '#,##0.00'];
 
       const days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-      let idx = 0;
-      const base_dt = new Date(2024, 0, 1, 0, 0, 0); // Año bisiesto arbitrario para concordancia de días
-      
+      let dataIdx = 0;
+      const base_dt = new Date(2024, 0, 1, 0, 0, 0);
+
       for (let m = 0; m < 12; m++) {
         const n_days = days_in_month[m];
         for (let d = 1; d <= n_days; d++) {
           const doy = _dayOfYear(m + 1, d);
           for (let interval = 0; interval < 96; interval++) {
-            const timestamp = new Date(base_dt.getTime() + idx * 15 * 60 * 1000);
-            
-            const formatStr = timestamp.getFullYear() + "-" + 
-                              String(timestamp.getMonth() + 1).padStart(2,'0') + "-" + 
-                              String(timestamp.getDate()).padStart(2,'0') + " " + 
-                              String(timestamp.getHours()).padStart(2,'0') + ":" + 
-                              String(timestamp.getMinutes()).padStart(2,'0');
+            const ts = new Date(base_dt.getTime() + dataIdx * 15 * 60 * 1000);
+            const formatStr =
+              ts.getFullYear() + '-' +
+              String(ts.getMonth() + 1).padStart(2, '0') + '-' +
+              String(ts.getDate()).padStart(2, '0') + ' ' +
+              String(ts.getHours()).padStart(2, '0') + ':' +
+              String(ts.getMinutes()).padStart(2, '0');
 
-            const gtot = state.solarData.Gtot_arr[idx];
-            const p_pv = state.solarData.P_kw_arr[idx];
-
-            const row = [
-              idx + 1,
-              formatStr,
-              doy,
-              gtot,
-              p_pv
-            ];
+            const gtot  = state.solarData.Gtot_arr[dataIdx];
+            const p_pv  = state.solarData.P_kw_arr[dataIdx];
+            const rowVals5 = [dataIdx + 1, formatStr, doy, gtot, p_pv];
 
             if (state.demandData) {
-              const p_dem = state.demandData.demand_kW[idx];
-              row.push(p_dem, p_pv - p_dem);
+              const p_dem = state.demandData.demand_kW[dataIdx];
+              rowVals5.push(p_dem, p_pv - p_dem);
             }
-            annualRows.push(row);
-            idx++;
+
+            addDataRow(ws5, rowVals5, dataIdx % 2 === 0, aligns5, fmts5);
+            dataIdx++;
           }
         }
       }
-      const ws5 = XLSX.utils.aoa_to_sheet(annualRows);
-      XLSX.utils.book_append_sheet(wb, ws5, "5. Datos Crudos Anuales");
 
-      // Guardar archivo Excel en el cliente de forma nativa e instantánea
-      XLSX.writeFile(wb, "Reporte_Simulacion_PV_Jensen_GDMTH.xlsx");
+      autofitColumns(ws5);
+
+      // ── Guardar el libro con formato profesional ──
+      workbook.xlsx.writeBuffer().then((buffer) => {
+        saveAs(
+          new Blob([buffer], { type: 'application/octet-stream' }),
+          'Reporte_Simulacion_PV_Jensen_GDMTH.xlsx'
+        );
+      }).catch((err) => {
+        alert(`Error al escribir Excel: ${err.message}`);
+        console.error(err);
+      }).finally(() => {
+        hideLoader();
+      });
+
     } catch (e) {
       alert(`Error al generar Excel: ${e.message}`);
       console.error(e);
-    } finally {
       hideLoader();
     }
   }, 100);
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ANIMACIONES DE SCROLL
