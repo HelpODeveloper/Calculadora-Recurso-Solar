@@ -230,7 +230,6 @@ function initSliders() {
   const sliders = [
     { slider: 'fc-planta',      display: 'fc-planta-val',      suffix: '%',  multiplier: 100, decimals: 0 },
     { slider: 'fp-potencia',    display: 'fp-potencia-val',    suffix: '',   multiplier: 1,   decimals: 2 },
-    { slider: 'eta-panel',      display: 'eta-panel-val',      suffix: '%',  multiplier: 100, decimals: 0 },
     { slider: 'tilt-angle',     display: 'tilt-val',           suffix: '°',  multiplier: 1,   decimals: 0 },
     { slider: 'weekend-factor', display: 'weekend-factor-val', suffix: '%',  multiplier: 100, decimals: 0 },
     { slider: 'summer-boost',   display: 'summer-boost-val',   suffix: '',   multiplier: 1,   decimals: 2, prefix: '×' },
@@ -564,7 +563,7 @@ function renderDemandStats(stats) {
 // ─────────────────────────────────────────────────────────────────────────────
 // CLIENT-SIDE: MOTOR SOLAR FOTOVOLTAICO (JENSEN)
 // ─────────────────────────────────────────────────────────────────────────────
-function runSolarEngine(lat, lon, alt, eta, area_m2, n_panels, tilt, azimuth, p_nominal_w) {
+function runSolarEngine(lat, lon, alt, n_panels, tilt, azimuth, p_nominal_w) {
   const lat_r = lat * DEG;
   const lon_r = lon * DEG;
   const tilt_r = tilt * DEG;
@@ -604,7 +603,7 @@ function runSolarEngine(lat, lon, alt, eta, area_m2, n_panels, tilt, azimuth, p_
         const Gtot = _poaIrradiance(horiz.Gb_h, horiz.Gd_h, alpha_eff, pos.azimuth, tilt_r, azimuth_r);
 
         // Generación PV [kW] considerando pérdidas del sistema de 15% (Performance Ratio = 0.85)
-        const P_kw = (eta * area_m2 * Gtot * n_panels * 0.85) / 1000.0;
+        const P_kw = (p_nominal_w * n_panels * Gtot * 0.85) / 1000000.0;
 
         Gtot_arr[idx] = Gtot;
         Gb_h_arr[idx] = horiz.Gb_h;
@@ -704,8 +703,6 @@ function runSolarEngine(lat, lon, alt, eta, area_m2, n_panels, tilt, azimuth, p_
     n_horas_generacion: active_hours,
     n_paneles: n_panels,
     potencia_nominal_W_panel: p_nominal_w,
-    eta: eta,
-    area_m2: area_m2,
     tilt: tilt,
     azimuth: azimuth,
     lat: lat,
@@ -731,8 +728,6 @@ async function runSolar() {
     lat:          parseFloat($('input-lat').value),
     lon:          parseFloat($('input-lon').value),
     alt:          parseFloat($('input-alt').value),
-    eta:          parseFloat($('eta-panel').value),
-    area_m2:      parseFloat($('input-area').value),
     n_panels:     parseInt($('input-npanels').value),
     tilt:         parseFloat($('tilt-angle').value),
     azimuth:      parseFloat($('input-azimuth').value),
@@ -750,8 +745,7 @@ async function runSolar() {
     try {
       const data = runSolarEngine(
         payload.lat, payload.lon, payload.alt,
-        payload.eta, payload.area_m2, payload.n_panels,
-        payload.tilt, payload.azimuth, payload.p_nominal_w
+        payload.n_panels, payload.tilt, payload.azimuth, payload.p_nominal_w
       );
 
       // Calcular balance si hay demanda guardada
@@ -830,7 +824,6 @@ function renderSolarKPIs(stats, balance) {
   const kpis = [
     { id: 'kpi-energia', val: formatNum(stats.energia_anual_MWh, 2), unit: 'MWh/año', label: 'Energía generada', color: '#f97316' },
     { id: 'kpi-fc',      val: formatNum(stats.factor_capacidad_pct, 1), unit: '%', label: 'Factor de capacidad', color: '#fbbf24' },
-    { id: 'kpi-pmax',    val: formatNum(stats.p_max_kW, 2), unit: 'kW', label: 'Pico de generación', color: '#3b82f6' },
     { id: 'kpi-irrad',   val: formatNum(stats.irrad_poa_kWh_m2, 0), unit: 'kWh/m²', label: 'Irradiación POA anual', color: '#f97316' },
     { id: 'kpi-hpse',    val: formatNum(stats.horas_pico_sol_equiv, 0), unit: 'hrs', label: 'Horas pico solar equiv.', color: '#10b981' },
     { id: 'kpi-cob',     val: balance ? formatNum(balance.cobertura_pct, 1) : '—', unit: '%', label: 'Cobertura de demanda', color: '#10b981' },
@@ -1195,8 +1188,6 @@ function downloadExcel() {
         ['Latitud del Emplazamiento', s.lat, '° (Positivo = Norte)'],
         ['Longitud del Emplazamiento', s.lon, '° (Positivo = Este)'],
         ['Altitud sobre el nivel del mar', s.alt, 'm s.n.m.'],
-        ['Eficiencia del Módulo Fotovoltaico (η)', s.eta, 'fracción decimal'],
-        ['Área Superficial Frontal de un Panel', s.area_m2, 'm²'],
         ['Potencia Nominal de Placa Unitario', s.potencia_nominal_W_panel, 'W'],
         ['Cantidad Total de Módulos (N)', s.n_paneles, 'paneles'],
         ['Potencia Pico Total Instalada', s.p_nominal_total_kW, 'kWp'],
@@ -1266,7 +1257,6 @@ function downloadExcel() {
       const kpisSolar = [
         ['Energía Anual Generada', s.energia_anual_kWh, 'kWh/año', 'Generación eléctrica acumulada integrable durante los 365 días.'],
         ['Factor de Capacidad Solar', s.factor_capacidad_pct / 100, '%', 'Aprovechamiento real del arreglo respecto a operar 24/7 a máxima capacidad.'],
-        ['Potencia Máxima Instantánea Generada', s.p_max_kW, 'kW', 'Pico absoluto registrado en el inversor durante el año.'],
         ['Irradiación Horizontal Anual', s.irrad_horizontal_kWh_m2, 'kWh/m²/año', 'Recurso de irradiancia global acumulado sobre superficie horizontal.'],
         ['Irradiación POA Anual (Jensen)', s.irrad_poa_kWh_m2, 'kWh/m²/año', 'Recurso de irradiancia POA captado por la inclinación de los módulos.'],
         ['Horas Pico Solar Equivalentes (HPSE)', s.horas_pico_sol_equiv, 'horas/año', 'Horas de sol teóricas a irradiancia constante de 1,000 W/m².'],

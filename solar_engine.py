@@ -166,8 +166,7 @@ def _poa_irradiance(Gb_h: float, Gd_h: float, alpha_rad: float,
 # MOTOR PRINCIPAL
 # ─────────────────────────────────────────────────────────────────────────────
 def run_solar_engine(lat: float, lon: float, alt: float,
-                     eta: float, area_m2: float, n_panels: int,
-                     tilt: float, azimuth: float,
+                     n_panels: int, tilt: float, azimuth: float,
                      p_nominal_w: float) -> dict:
     """
     Motor de Jensen completo para un año (35,040 intervalos de 15 min).
@@ -176,8 +175,6 @@ def run_solar_engine(lat: float, lon: float, alt: float,
         lat        : Latitud [°] positivo Norte
         lon        : Longitud [°] positivo Este
         alt        : Altitud [m] — usado para corrección de densidad de aire
-        eta        : Eficiencia del panel [fracción, ej: 0.20]
-        area_m2    : Área de un panel [m²]
         n_panels   : Número de paneles
         tilt       : Ángulo de inclinación del panel [°] respecto a horizontal
         azimuth    : Azimut del panel [°] 0=Norte, 90=Este, 180=Sur, 270=Oeste
@@ -225,7 +222,7 @@ def run_solar_engine(lat: float, lon: float, alt: float,
                 Gtot = _poa_irradiance(Gb_h, Gd_h, alpha_eff, az_sun, tilt_r, azimuth_r)
 
                 # Generación PV [kW]
-                P_kw = (eta * area_m2 * Gtot * n_panels) / 1000.0
+                P_kw = (p_nominal_w * n_panels * Gtot) / 1000000.0
 
                 Gtot_arr[idx] = Gtot
                 Gb_h_arr[idx] = Gb_h
@@ -287,8 +284,6 @@ def run_solar_engine(lat: float, lon: float, alt: float,
         'n_horas_generacion': float(np.sum(P_kw_arr > 0) * 0.25),
         'n_paneles': n_panels,
         'potencia_nominal_W_panel': p_nominal_w,
-        'eta': eta,
-        'area_m2': area_m2,
         'tilt': tilt,
         'azimuth': azimuth,
         'lat': lat,

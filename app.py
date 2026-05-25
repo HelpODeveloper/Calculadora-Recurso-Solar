@@ -103,14 +103,12 @@ def api_solar():
         lat         = float(np.clip(float(d.get('lat', 25.67)), -90, 90))
         lon         = float(d.get('lon', -100.31))
         alt         = float(d.get('alt', 538))
-        eta         = float(np.clip(float(d.get('eta', 0.20)), 0.05, 0.50))
-        area_m2     = float(d.get('area_m2', 2.0))
         n_panels    = max(1, int(d.get('n_panels', 50)))
         tilt        = float(np.clip(float(d.get('tilt', 25.0)), 0, 90))
         azimuth     = float(d.get('azimuth', 180.0))
         p_nominal_w = float(d.get('p_nominal_w', 400))
 
-        result = run_solar_engine(lat, lon, alt, eta, area_m2,
+        result = run_solar_engine(lat, lon, alt,
                                   n_panels, tilt, azimuth, p_nominal_w)
 
         # Balance si hay demanda en caché
@@ -242,8 +240,6 @@ def api_download_excel():
         ('Latitud',            f"{s['lat']} °"),
         ('Longitud',           f"{s['lon']} °"),
         ('Altitud',            f"{s['alt']} m s.n.m."),
-        ('Eficiencia del panel η', f"{s['eta']*100:.1f} %"),
-        ('Área del panel',     f"{s['area_m2']} m²"),
         ('Potencia nominal',   f"{s['potencia_nominal_W_panel']} W"),
         ('Número de paneles',  s['n_paneles']),
         ('Inclinación (tilt)', f"{s['tilt']} °"),
@@ -294,7 +290,6 @@ def api_download_excel():
         ('Energía anual generada', f"{s['energia_anual_kWh']:,.0f}", 'kWh/año'),
         ('Energía anual generada', f"{s['energia_anual_MWh']:,.2f}", 'MWh/año'),
         ('Potencia pico del sistema', f"{s['p_nominal_total_kW']:,.2f}", 'kWp'),
-        ('Potencia máxima generada', f"{s['p_max_kW']:,.2f}", 'kW'),
         ('Factor de capacidad', f"{s['factor_capacidad_pct']:,.2f}", '%'),
         ('Horas pico solar equiv.', f"{s['horas_pico_sol_equiv']:,.0f}", 'hrs/año'),
         ('Horas con generación > 0', f"{s['n_horas_generacion']:,.0f}", 'hrs/año'),
