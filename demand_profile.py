@@ -2,113 +2,173 @@
 demand_profile.py
 Generador de perfil de demanda industrial quinceminutal (15-min).
 Genera 35,040 puntos = 365 días × 24 hrs × 4 intervalos.
+
+Parámetros completamente configurables por el usuario:
+  - Potencia máxima (libre, en kW)
+  - Factor de carga y potencia
+  - Número de turnos (1, 2 o 3)
+  - Tipo de planta / industria
+  - Factor de operación en fin de semana
+  - Factor de incremento en verano
 """
 
 import numpy as np
 
+PLANT_PROFILES = {
+    'manufactura_ligera': {
+        'name': 'Manufactura Ligera', 'desc': 'Turnos bien definidos.',
+        'weekday': [
+            0.35, 0.33, 0.32, 0.32, 0.34, 0.60, 0.82, 0.95, 1.00, 1.00, 0.98, 0.72,
+            0.72, 0.96, 1.00, 1.00, 0.95, 0.78, 0.68, 0.65, 0.60, 0.55, 0.45, 0.38,
+        ],
+        'weekend': [
+            0.15, 0.14, 0.13, 0.13, 0.14, 0.20, 0.30, 0.42, 0.48, 0.48, 0.46, 0.40,
+            0.38, 0.42, 0.46, 0.44, 0.40, 0.35, 0.30, 0.25, 0.22, 0.20, 0.17, 0.15,
+        ],
+    },
+    'manufactura_pesada': {
+        'name': 'Manufactura Pesada', 'desc': 'Alta carga base nocturna.',
+        'weekday': [
+            0.70, 0.68, 0.67, 0.66, 0.68, 0.75, 0.85, 0.95, 1.00, 1.00, 0.98, 0.95,
+            0.88, 0.95, 1.00, 1.00, 0.98, 0.95, 0.90, 0.85, 0.82, 0.80, 0.75, 0.72,
+        ],
+        'weekend': [
+            0.60, 0.58, 0.56, 0.55, 0.56, 0.60, 0.65, 0.70, 0.75, 0.75, 0.73, 0.70,
+            0.68, 0.70, 0.72, 0.70, 0.68, 0.65, 0.63, 0.62, 0.61, 0.60, 0.59, 0.60,
+        ],
+    },
+    'oficinas': {
+        'name': 'Edificio de Oficinas', 'desc': 'HVAC dominante.',
+        'weekday': [
+            0.12, 0.11, 0.11, 0.11, 0.12, 0.20, 0.45, 0.72, 0.90, 0.98, 1.00, 1.00,
+            0.90, 0.98, 1.00, 0.98, 0.90, 0.70, 0.45, 0.30, 0.22, 0.18, 0.15, 0.12,
+        ],
+        'weekend': [
+            0.10, 0.10, 0.10, 0.10, 0.10, 0.12, 0.15, 0.18, 0.20, 0.22, 0.22, 0.20,
+            0.18, 0.18, 0.18, 0.15, 0.14, 0.12, 0.11, 0.10, 0.10, 0.10, 0.10, 0.10,
+        ],
+    },
+    'almacen': {
+        'name': 'Almacén', 'desc': 'Horario diurno.',
+        'weekday': [
+            0.20, 0.18, 0.18, 0.18, 0.20, 0.40, 0.65, 0.85, 0.95, 1.00, 1.00, 0.95,
+            0.88, 0.95, 1.00, 0.98, 0.92, 0.80, 0.60, 0.40, 0.32, 0.28, 0.24, 0.20,
+        ],
+        'weekend': [
+            0.18, 0.17, 0.17, 0.17, 0.18, 0.25, 0.35, 0.50, 0.60, 0.65, 0.65, 0.62,
+            0.58, 0.62, 0.65, 0.62, 0.55, 0.45, 0.35, 0.28, 0.24, 0.22, 0.20, 0.18,
+        ],
+    },
+    'data_center': {
+        'name': 'Centro de Datos', 'desc': 'Carga casi constante 24/7.',
+        'weekday': [
+            0.88, 0.87, 0.86, 0.86, 0.87, 0.89, 0.92, 0.96, 1.00, 1.00, 0.99, 0.98,
+            0.97, 0.98, 1.00, 1.00, 0.99, 0.98, 0.96, 0.94, 0.92, 0.91, 0.90, 0.89,
+        ],
+        'weekend': [
+            0.86, 0.85, 0.84, 0.84, 0.85, 0.86, 0.88, 0.90, 0.92, 0.93, 0.93, 0.92,
+            0.91, 0.91, 0.92, 0.91, 0.90, 0.89, 0.88, 0.87, 0.87, 0.86, 0.86, 0.86,
+        ],
+    },
+}
 
-def generate_demand_profile(Pmax_kW: float, FC_planta: float, FP_potencia: float) -> dict:
-    """
-    Genera la curva de carga quinceminutal anual de una planta industrial.
+def _apply_shifts(profile_24h: list, n_shifts: int) -> list:
+    adjusted = list(profile_24h)
+    if n_shifts == 1:
+        for h in range(24):
+            if not (6 <= h < 14): adjusted[h] = profile_24h[h] * 0.20
+    elif n_shifts == 2:
+        for h in range(24):
+            if not (6 <= h < 22): adjusted[h] = profile_24h[h] * 0.25
+    return adjusted
 
-    Args:
-        Pmax_kW    : Demanda máxima de la planta [kW] (30, 50 o 60)
-        FC_planta  : Factor de carga de la planta [0.50 – 0.70]
-        FP_potencia: Factor de potencia [0.70 – 0.95]
-
-    Returns:
-        dict con:
-            - 'demand_kW'     : array (35,040,) demanda cada 15 min [kW]
-            - 'hours'         : array (35,040,) horas del año [0, 0.25, 0.5 ...]
-            - 'monthly_avg'   : array (12,) promedio mensual [kW]
-            - 'monthly_max'   : array (12,) máximo mensual [kW]
-            - 'monthly_min'   : array (12,) mínimo mensual [kW]
-            - 'daily_profile' : array (96,) perfil diario representativo
-            - 'stats'         : dict con estadísticas globales
-    """
+def generate_demand_profile(
+    Pmax_kW: float, FC_planta: float, FP_potencia: float,
+    n_shifts: int = 2, plant_type: str = 'manufactura_ligera',
+    weekend_op_factor: float = 0.50, summer_boost: float = 1.10,
+) -> dict:
     np.random.seed(42)
+    if plant_type not in PLANT_PROFILES: plant_type = 'manufactura_ligera'
+    profile_data = PLANT_PROFILES[plant_type]
 
-    N = 35040  # puntos totales en el año
+    profile_weekday = _apply_shifts(profile_data['weekday'], n_shifts)
+    profile_weekend_base = _apply_shifts(profile_data['weekend'], n_shifts)
+
+    N = 35040
     demand = np.zeros(N)
-
-    # Días del año de referencia (2024 = año bisiesto simplificado a 365)
     days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-
-    # Meses de verano (México): mayo - sep (índices 4 a 8)
     summer_months = {4, 5, 6, 7, 8}
 
     idx = 0
     for month_idx, n_days in enumerate(days_in_month):
         is_summer = month_idx in summer_months
-        season_factor = 1.15 if is_summer else 1.0
+        season_factor = summer_boost if is_summer else 1.0
 
         for day in range(n_days):
-            # Día de la semana: 0=lunes, 6=domingo (2024 empieza en lunes)
-            day_of_year = sum(days_in_month[:month_idx]) + day
-            weekday = day_of_year % 7  # 0-4 laboral, 5-6 finde
-
+            weekday = (sum(days_in_month[:month_idx]) + day) % 7
             is_weekend = weekday >= 5
-            weekend_factor = 0.60 if is_weekend else 1.0
 
-            for interval in range(96):  # 96 intervalos de 15 min por día
-                hour_of_day = interval / 4.0  # hora real (0.0 – 23.75)
+            if is_weekend:
+                base_profile = [v * weekend_op_factor for v in profile_weekend_base]
+            else:
+                base_profile = profile_weekday
 
-                # Perfil horario industrial base
-                base = _industrial_hourly_profile(hour_of_day, is_weekend)
+            for interval in range(96):
+                hour_of_day = int(interval / 4)
+                frac = (interval % 4) / 4.0
+                next_h = (hour_of_day + 1) % 24
+                base = (1 - frac) * base_profile[hour_of_day] + frac * base_profile[next_h]
 
-                # Aplicar factores
-                p = Pmax_kW * base * FC_planta * season_factor * weekend_factor
-
-                # Ruido gaussiano ±5%
-                noise = np.random.normal(1.0, 0.05)
-                p = max(0.0, p * noise)
-
-                demand[idx] = p
+                p = Pmax_kW * base * FC_planta * season_factor
+                noise = np.random.normal(1.0, 0.04)
+                demand[idx] = max(0.0, p * noise)
                 idx += 1
 
-    # ── Post-proceso ──────────────────────────────────────────────────────────
-    # Escalar para que el máximo real sea ≈ Pmax_kW
     if demand.max() > 0:
-        demand = demand * (Pmax_kW / demand.max()) * FP_potencia
+        demand = demand * (Pmax_kW * FP_potencia / demand.max())
 
-    hours = np.arange(N) * 0.25  # horas del año
+    hours = np.arange(N) * 0.25
 
-    # Promedios mensuales (kW)
-    monthly_avg = []
-    monthly_max = []
-    monthly_min = []
+    monthly_avg, monthly_max, monthly_min, monthly_kwh = [], [], [], []
     idx = 0
     for n_days in days_in_month:
         n_pts = n_days * 96
-        segment = demand[idx: idx + n_pts]
-        monthly_avg.append(float(np.mean(segment)))
-        monthly_max.append(float(np.max(segment)))
-        monthly_min.append(float(np.min(segment)))
+        seg = demand[idx: idx + n_pts]
+        monthly_avg.append(float(np.mean(seg)))
+        monthly_max.append(float(np.max(seg)))
+        monthly_min.append(float(np.min(seg)))
+        monthly_kwh.append(float(np.sum(seg) * 0.25))
         idx += n_pts
 
-    # Perfil diario representativo (promedio de todos los días laborales)
-    daily_profile = np.zeros(96)
-    count = 0
+    daily_weekday = np.zeros(96)
+    daily_weekend = np.zeros(96)
+    cnt_w, cnt_we = 0, 0
     for d in range(365):
-        if d % 7 < 5:  # día laboral
-            daily_profile += demand[d * 96: d * 96 + 96]
-            count += 1
-    if count > 0:
-        daily_profile /= count
+        seg = demand[d * 96: (d + 1) * 96]
+        if d % 7 < 5:
+            daily_weekday += seg; cnt_w += 1
+        else:
+            daily_weekend += seg; cnt_we += 1
+    if cnt_w  > 0: daily_weekday /= cnt_w
+    if cnt_we > 0: daily_weekend /= cnt_we
 
-    # Estadísticas globales
-    energy_kwh = float(np.sum(demand) * 0.25)  # kWh anuales
+    energy_kwh = float(np.sum(demand) * 0.25)
     stats = {
         'pmax_kW': float(Pmax_kW),
         'p_media_kW': float(np.mean(demand)),
         'p_min_kW': float(np.min(demand)),
-        'p_max_kW': float(np.max(demand)),
+        'p_max_real_kW': float(np.max(demand)),
         'energia_anual_kWh': energy_kwh,
         'energia_anual_MWh': energy_kwh / 1000,
-        'factor_carga_real': float(np.mean(demand) / np.max(demand)) if np.max(demand) > 0 else 0,
+        'factor_carga_real': float(np.mean(demand) / np.max(demand)) if demand.max() > 0 else 0,
         'horas_punta_equiv': energy_kwh / Pmax_kW if Pmax_kW > 0 else 0,
         'FC_planta': FC_planta,
         'FP_potencia': FP_potencia,
+        'n_shifts': n_shifts,
+        'plant_type': plant_type,
+        'plant_name': profile_data['name'],
+        'weekend_op_factor': weekend_op_factor,
+        'summer_boost': summer_boost,
     }
 
     return {
@@ -117,45 +177,9 @@ def generate_demand_profile(Pmax_kW: float, FC_planta: float, FP_potencia: float
         'monthly_avg': monthly_avg,
         'monthly_max': monthly_max,
         'monthly_min': monthly_min,
-        'daily_profile': daily_profile.tolist(),
+        'monthly_kWh': monthly_kwh,
+        'daily_weekday': daily_weekday.tolist(),
+        'daily_weekend': daily_weekend.tolist(),
+        'daily_profile': daily_weekday.tolist(), # compatibilidad
         'stats': stats,
     }
-
-
-def _industrial_hourly_profile(hour: float, is_weekend: bool) -> float:
-    """
-    Perfil horario industrial normalizado [0–1] para una planta manufacturera.
-    Modela: arranque, producción plena, turno medio, bajada nocturna.
-    """
-    if is_weekend:
-        # Fin de semana: planta en mantenimiento / guardia mínima
-        if 0 <= hour < 6:
-            return 0.15
-        elif 6 <= hour < 10:
-            return 0.30
-        elif 10 <= hour < 16:
-            return 0.45
-        elif 16 <= hour < 20:
-            return 0.35
-        else:
-            return 0.20
-    else:
-        # Día laboral: 3 turnos típicos de manufactura
-        if 0 <= hour < 5:        # Turno nocturno bajo
-            return 0.35
-        elif 5 <= hour < 6:      # Arranque turno mañana
-            return 0.60
-        elif 6 <= hour < 8:      # Rampa de producción
-            return 0.80
-        elif 8 <= hour < 12:     # Producción plena turno 1
-            return 1.00
-        elif 12 <= hour < 13:    # Comida / ajuste de turno
-            return 0.70
-        elif 13 <= hour < 17:    # Producción plena turno 2
-            return 0.95
-        elif 17 <= hour < 18:    # Cambio de turno
-            return 0.75
-        elif 18 <= hour < 22:    # Turno nocturno parcial
-            return 0.65
-        else:                    # Madrugada
-            return 0.40

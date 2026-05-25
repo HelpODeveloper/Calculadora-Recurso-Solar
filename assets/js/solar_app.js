@@ -51,17 +51,19 @@ function formatNum(n, dec = 1) {
 // ─────────────────────────────────────────────────────────────────────────────
 function initSliders() {
   const sliders = [
-    { slider: 'fc-planta',   display: 'fc-planta-val',   suffix: '%', multiplier: 100 },
-    { slider: 'fp-potencia', display: 'fp-potencia-val', suffix: '',  multiplier: 1   },
-    { slider: 'eta-panel',   display: 'eta-panel-val',   suffix: '%', multiplier: 100 },
-    { slider: 'tilt-angle',  display: 'tilt-val',        suffix: '°', multiplier: 1   },
+    { slider: 'fc-planta',      display: 'fc-planta-val',      suffix: '%',  multiplier: 100, decimals: 0 },
+    { slider: 'fp-potencia',    display: 'fp-potencia-val',    suffix: '',   multiplier: 1,   decimals: 2 },
+    { slider: 'eta-panel',      display: 'eta-panel-val',      suffix: '%',  multiplier: 100, decimals: 0 },
+    { slider: 'tilt-angle',     display: 'tilt-val',           suffix: '°',  multiplier: 1,   decimals: 0 },
+    { slider: 'weekend-factor', display: 'weekend-factor-val', suffix: '%',  multiplier: 100, decimals: 0 },
+    { slider: 'summer-boost',   display: 'summer-boost-val',   suffix: '',   multiplier: 1,   decimals: 2, prefix: '×' },
   ];
-  sliders.forEach(({ slider, display, suffix, multiplier }) => {
+  sliders.forEach(({ slider, display, suffix, multiplier, decimals, prefix }) => {
     const el = $(slider), disp = $(display);
     if (!el || !disp) return;
     const update = () => {
       const v = parseFloat(el.value) * multiplier;
-      disp.textContent = `${Number(v.toFixed(1))}${suffix}`;
+      disp.textContent = `${prefix || ''}${v.toFixed(decimals)}${suffix}`;
     };
     el.addEventListener('input', update);
     update();
@@ -83,16 +85,28 @@ function destroyChart(key) {
 // SECCIÓN 1: PERFIL DE DEMANDA
 // ─────────────────────────────────────────────────────────────────────────────
 async function runDemand() {
-  const Pmax = parseFloat($('pmax-select').value);
-  const FC   = parseFloat($('fc-planta').value);
-  const FP   = parseFloat($('fp-potencia').value);
+  const Pmax          = parseFloat($('pmax-input')?.value ?? 50);
+  const FC            = parseFloat($('fc-planta').value);
+  const FP            = parseFloat($('fp-potencia').value);
+  const n_shifts      = parseInt($('n-shifts-select').value);
+  const plant_type    = $('plant-type-select').value;
+  const weekend_op    = parseFloat($('weekend-factor').value);
+  const summer_boost  = parseFloat($('summer-boost').value);
 
   showLoader('⚡ Generando perfil de demanda anual (35,040 puntos)...');
   try {
     const res = await fetch('/api/demand', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pmax_kW: Pmax, fc_planta: FC, fp_potencia: FP })
+      body: JSON.stringify({
+        pmax_kW          : Pmax,
+        fc_planta        : FC,
+        fp_potencia      : FP,
+        n_shifts         : n_shifts,
+        plant_type       : plant_type,
+        weekend_op_factor: weekend_op,
+        summer_boost     : summer_boost,
+      })
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error);
@@ -102,7 +116,7 @@ async function runDemand() {
     renderDemandStats(data.stats);
     $('demand-results').classList.remove('hidden');
     $('demand-results').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    showAlert('demand-alert', 'success', 'Perfil de demanda generado correctamente.');
+    showAlert('demand-alert', 'success', `Perfil generado — ${data.stats.plant_name} · ${n_shifts} turno(s) · Pmax ${Pmax} kW`);
   } catch (e) {
     showAlert('demand-alert', 'error', `Error: ${e.message}`);
   } finally {
@@ -509,8 +523,12 @@ function renderSolarStats(stats, balance) {
 // ─────────────────────────────────────────────────────────────────────────────
 // DESCARGA CSV
 // ─────────────────────────────────────────────────────────────────────────────
-function downloadCSV() {
-  window.location.href = '/api/download';
+function downloadExcel() {
+  if (!state.solarData) {
+    alert('Ejecuta primero el Motor Solar para generar los datos.');
+    return;
+  }
+  window.location.href = '/api/download/excel';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -541,7 +559,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Botones
   $('btn-demand')?.addEventListener('click', runDemand);
   $('btn-solar')?.addEventListener('click', runSolar);
-  $('btn-download')?.addEventListener('click', downloadCSV);
+  $('btn-download')?.addEventListener('click', downloadExcel);
 
   // Ocultar secciones de resultados hasta que se calculen
   ['demand-results', 'solar-results'].forEach(id => {
