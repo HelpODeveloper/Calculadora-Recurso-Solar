@@ -1,0 +1,527 @@
+<!DOCTYPE HTML>
+<!--
+  Motor Solar Fotovoltaico — Interfaz Web
+  Basado en Tessellate by HTML5 UP | Adaptado con diseño premium solar
+  Backend: Flask (Python) — Motor de Jensen simplificado
+-->
+<html lang="es">
+
+<head>
+  <title>Motor Solar FV — Jensen Engine</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <meta name="description" content="Motor solar fotovoltaico basado en el modelo de Jensen. Calcula irradiancia POA, generación eléctrica y balance de demanda industrial con resolución quinceminutal anual." />
+
+  <!-- Estilos base del template -->
+  <link rel="stylesheet" href="assets/css/main.css" />
+  <!-- Estilos premium solar -->
+  <link rel="stylesheet" href="assets/css/solar.css" />
+
+  <!-- Chart.js via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <style>
+    /* Overrides para integrar con Tessellate */
+    body { background: #0a0e1a !important; color: #f1f5f9 !important; }
+    .hidden { display: none !important; }
+    .section-divider-line {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(249,115,22,0.4), transparent);
+      margin: 0;
+    }
+  </style>
+</head>
+
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     LOADER OVERLAY
+════════════════════════════════════════════════════════════════════════════ -->
+<div id="loader-overlay" class="loader-overlay">
+  <div class="loader-spinner"></div>
+  <p class="loader-text">Calculando...</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     NAVBAR
+════════════════════════════════════════════════════════════════════════════ -->
+<nav class="navbar">
+  <a href="#hero" class="navbar-brand">
+    <span class="brand-icon">☀️</span>
+    <div>
+      <div class="brand-text">Motor Solar FV</div>
+      <div class="brand-sub">Jensen Engine · Flask API</div>
+    </div>
+  </a>
+  <div class="navbar-links">
+    <a href="#guia">Guía de Datos</a>
+    <a href="#demanda">Demanda</a>
+    <a href="#solar">Sistema PV</a>
+    <a href="#resultados">Resultados</a>
+  </div>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     HERO
+════════════════════════════════════════════════════════════════════════════ -->
+<section id="hero">
+  <div class="hero-bg"></div>
+  <div class="hero-grid"></div>
+  <div class="hero-content fade-in">
+    <div class="hero-badge">
+      <span>⚡</span>
+      Motor de Jensen · Irradiancia POA · 35,040 Puntos/Año
+    </div>
+    <h1 class="hero-title">
+      Motor Solar<br>
+      <span class="gradient-text">Fotovoltaico</span>
+    </h1>
+    <p class="hero-subtitle">
+      Calcula la generación eléctrica anual de tu planta industrial con
+      resolución quinceminutal usando el modelo simplificado de Jensen.
+      Backend Python — Frontend interactivo.
+    </p>
+    <div class="hero-actions">
+      <button class="btn btn-primary" onclick="scrollTo('guia')">
+        <span>📋</span> Ver Guía de Datos
+      </button>
+      <button class="btn btn-secondary" onclick="scrollTo('demanda')">
+        <span>⚡</span> Comenzar Análisis
+      </button>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider-line"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECCIÓN 0: GUÍA DE DATOS (qué ingresar y cómo)
+════════════════════════════════════════════════════════════════════════════ -->
+<section id="guia" class="section">
+  <div class="section-inner">
+    <div class="section-header fade-in">
+      <span class="section-tag tag-blue">📋 Guía de Datos</span>
+      <h2 class="section-title">¿Qué datos necesitas y cómo ingresarlos?</h2>
+      <p class="section-desc">
+        Esta herramienta opera en dos pasos independientes. Sigue el orden recomendado
+        para obtener el balance energético completo.
+      </p>
+    </div>
+
+    <!-- Tarjetas de pasos -->
+    <div class="guide-grid fade-in">
+
+      <div class="guide-card">
+        <span class="guide-card-num">01</span>
+        <span class="guide-icon">🏭</span>
+        <h3>Paso 1 — Perfil de Demanda</h3>
+        <p>
+          Define la demanda eléctrica de tu planta industrial. No necesitas subir archivos —
+          el motor genera automáticamente 35,040 puntos de demanda (cada 15 min durante 365 días)
+          con variación estacional, fin de semana y horaria realista.
+        </p>
+      </div>
+
+      <div class="guide-card">
+        <span class="guide-card-num">02</span>
+        <span class="guide-icon">☀️</span>
+        <h3>Paso 2 — Sistema Fotovoltaico</h3>
+        <p>
+          Ingresa la ubicación de tu instalación y las características de un panel comercial real.
+          El Motor de Jensen calculará la irradiancia en el plano de arreglo (POA) y la generación
+          eléctrica para toda la resolución anual quinceminutal.
+        </p>
+      </div>
+
+      <div class="guide-card">
+        <span class="guide-card-num">03</span>
+        <span class="guide-icon">📊</span>
+        <h3>Resultados y Descarga</h3>
+        <p>
+          Obtendrás KPIs, gráficas interactivas y estadísticas clave del balance energético.
+          Puedes descargar un CSV con todos los datos anuales: irradiancia POA, generación PV
+          y demanda, con fecha-hora en cada fila.
+        </p>
+      </div>
+
+    </div>
+
+    <!-- Tabla de parámetros requeridos -->
+    <div class="guide-params fade-in">
+      <div class="guide-params-header">📌 Parámetros de Entrada — Referencia Rápida</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Parámetro</th>
+            <th>Descripción</th>
+            <th>Rango / Formato</th>
+            <th>Ejemplo</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="param-name">Pmax [kW]</td>
+            <td>Demanda máxima de la planta</td>
+            <td class="param-range">30, 50 o 60 kW</td>
+            <td>50 kW</td>
+          </tr>
+          <tr>
+            <td class="param-name">FC Planta [%]</td>
+            <td>Factor de carga de la planta — fracción del tiempo que opera a carga máxima</td>
+            <td class="param-range">50% – 70%</td>
+            <td>60%</td>
+          </tr>
+          <tr>
+            <td class="param-name">FP Potencia</td>
+            <td>Factor de potencia del sistema eléctrico</td>
+            <td class="param-range">0.70 – 0.95</td>
+            <td>0.85</td>
+          </tr>
+          <tr>
+            <td class="param-name">Latitud [°]</td>
+            <td>Coordenada geográfica (+= Norte, -= Sur)</td>
+            <td class="param-range">-90° a +90°</td>
+            <td>25.67 (Monterrey)</td>
+          </tr>
+          <tr>
+            <td class="param-name">Longitud [°]</td>
+            <td>Coordenada geográfica (+= Este, -= Oeste)</td>
+            <td class="param-range">-180° a +180°</td>
+            <td>-100.31 (Monterrey)</td>
+          </tr>
+          <tr>
+            <td class="param-name">Altitud [m]</td>
+            <td>Elevación sobre el nivel del mar — afecta la masa de aire</td>
+            <td class="param-range">0 – 5,000 m</td>
+            <td>538 m (Monterrey)</td>
+          </tr>
+          <tr>
+            <td class="param-name">Eficiencia η [%]</td>
+            <td>Eficiencia de conversión del panel fotovoltaico</td>
+            <td class="param-range">14% – 25%</td>
+            <td>20% (panel estándar)</td>
+          </tr>
+          <tr>
+            <td class="param-name">Área [m²]</td>
+            <td>Área frontal de un panel</td>
+            <td class="param-range">1.0 – 3.0 m²</td>
+            <td>2.0 m² (400W std)</td>
+          </tr>
+          <tr>
+            <td class="param-name">Potencia nominal [W]</td>
+            <td>Potencia STC declarada por el fabricante</td>
+            <td class="param-range">200 – 700 W</td>
+            <td>400 W</td>
+          </tr>
+          <tr>
+            <td class="param-name">Tilt [°]</td>
+            <td>Ángulo de inclinación del panel respecto al plano horizontal</td>
+            <td class="param-range">0° – 90°</td>
+            <td>25° (≈ latitud)</td>
+          </tr>
+          <tr>
+            <td class="param-name">Azimut [°]</td>
+            <td>Orientación del panel (0=Norte, 90=Este, 180=Sur, 270=Oeste)</td>
+            <td class="param-range">0° – 360°</td>
+            <td>180° (hacia el Sur)</td>
+          </tr>
+          <tr>
+            <td class="param-name">N° Paneles</td>
+            <td>Cantidad de paneles en el arreglo FV</td>
+            <td class="param-range">1 – 1,000</td>
+            <td>50 paneles</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Nota importante -->
+    <div class="alert alert-info fade-in" style="margin-top:1.5rem">
+      <span>💡</span>
+      <span>
+        <strong>Nota sobre el modelo Jensen:</strong>
+        El motor utiliza la transmitancia atmosférica directa <em>τ_b = 0.7^(AM^0.678)</em>
+        y el modelo isotrópico de Hottel-Woertz para la componente difusa y reflejada en el plano inclinado
+        (POA). La altitud ajusta la masa de aire efectiva. Todos los cálculos se realizan en el servidor
+        Python en segundos.
+      </span>
+    </div>
+
+  </div>
+</section>
+
+<div class="section-divider-line"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECCIÓN 1: PERFIL DE DEMANDA
+════════════════════════════════════════════════════════════════════════════ -->
+<section id="demanda" class="section section-alt">
+  <div class="section-inner">
+    <div class="section-header fade-in">
+      <span class="section-tag tag-orange">⚡ Paso 1</span>
+      <h2 class="section-title">Perfil de Demanda Industrial</h2>
+      <p class="section-desc">
+        Define la demanda de tu planta. El motor genera el perfil quinceminutal anual
+        con variación estacional, de turno y fin de semana.
+      </p>
+    </div>
+
+    <!-- Formulario de demanda -->
+    <div class="card card-lg fade-in" style="margin-bottom:1.5rem">
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label class="form-label" for="pmax-select">
+            Demanda Máxima
+            <span class="label-unit">[kW]</span>
+          </label>
+          <select class="form-select" id="pmax-select">
+            <option value="30">30 kW — Planta pequeña</option>
+            <option value="50" selected>50 kW — Planta mediana</option>
+            <option value="60">60 kW — Planta grande</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="fc-planta">
+            Factor de Carga de Planta
+            <span class="label-unit">[50 – 70 %]</span>
+          </label>
+          <input type="range" class="form-range" id="fc-planta"
+                 min="0.50" max="0.70" step="0.01" value="0.60" />
+          <div class="range-value" id="fc-planta-val">60%</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="fp-potencia">
+            Factor de Potencia
+            <span class="label-unit">[0.70 – 0.95]</span>
+          </label>
+          <input type="range" class="form-range" id="fp-potencia"
+                 min="0.70" max="0.95" step="0.01" value="0.85" />
+          <div class="range-value" id="fp-potencia-val">0.85</div>
+        </div>
+
+      </div>
+
+      <div id="demand-alert" style="margin-top:1rem"></div>
+
+      <button class="btn btn-primary btn-full" id="btn-demand" style="margin-top:1.25rem">
+        <span>🏭</span> Generar Perfil de Demanda Anual
+      </button>
+    </div>
+
+    <!-- Resultados de demanda -->
+    <div id="demand-results">
+      <!-- Estadísticas -->
+      <div id="demand-stats-box" class="stats-summary fade-in" style="margin-bottom:1.5rem"></div>
+
+      <!-- Gráficas -->
+      <div class="charts-grid fade-in">
+        <div class="chart-container">
+          <div class="chart-title">Demanda Mensual Promedio y Máxima</div>
+          <canvas id="chart-demand-monthly" height="220"></canvas>
+        </div>
+        <div class="chart-container">
+          <div class="chart-title">Perfil Diario Representativo — Día Laboral</div>
+          <canvas id="chart-demand-daily" height="220"></canvas>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<div class="section-divider-line"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECCIÓN 2: CONFIGURACIÓN DEL SISTEMA PV
+════════════════════════════════════════════════════════════════════════════ -->
+<section id="solar" class="section">
+  <div class="section-inner">
+    <div class="section-header fade-in">
+      <span class="section-tag tag-gold">☀️ Paso 2</span>
+      <h2 class="section-title">Configuración del Sistema Fotovoltaico</h2>
+      <p class="section-desc">
+        Ingresa la geolocalización de tu sitio, las especificaciones del panel comercial
+        y la geometría de instalación.
+      </p>
+    </div>
+
+    <div class="card card-lg fade-in">
+
+      <!-- Geolocalización -->
+      <h3 style="font-size:0.85rem;color:var(--accent-orange);text-transform:uppercase;letter-spacing:.06em;margin-bottom:1rem;">
+        📍 Geolocalización del Sitio
+      </h3>
+      <div class="form-grid" style="margin-bottom:1.75rem">
+        <div class="form-group">
+          <label class="form-label" for="input-lat">
+            Latitud <span class="label-unit">[° N positivo]</span>
+          </label>
+          <input type="number" class="form-input" id="input-lat"
+                 step="0.001" value="25.670" placeholder="Ej: 25.670" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="input-lon">
+            Longitud <span class="label-unit">[° E positivo / O negativo]</span>
+          </label>
+          <input type="number" class="form-input" id="input-lon"
+                 step="0.001" value="-100.310" placeholder="Ej: -100.310" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="input-alt">
+            Altitud <span class="label-unit">[m s.n.m.]</span>
+          </label>
+          <input type="number" class="form-input" id="input-alt"
+                 step="1" value="538" placeholder="Ej: 538" />
+        </div>
+      </div>
+
+      <!-- Especificaciones del panel -->
+      <h3 style="font-size:0.85rem;color:var(--accent-orange);text-transform:uppercase;letter-spacing:.06em;margin-bottom:1rem;">
+        🔆 Especificaciones del Panel PV
+      </h3>
+      <div class="form-grid" style="margin-bottom:1.75rem">
+        <div class="form-group">
+          <label class="form-label" for="eta-panel">
+            Eficiencia η <span class="label-unit">[14 – 25 %]</span>
+          </label>
+          <input type="range" class="form-range" id="eta-panel"
+                 min="0.14" max="0.25" step="0.005" value="0.20" />
+          <div class="range-value" id="eta-panel-val">20%</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="input-area">
+            Área del Panel <span class="label-unit">[m²]</span>
+          </label>
+          <input type="number" class="form-input" id="input-area"
+                 step="0.01" value="2.00" placeholder="Ej: 2.00" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="input-pnominal">
+            Potencia Nominal <span class="label-unit">[W STC]</span>
+          </label>
+          <input type="number" class="form-input" id="input-pnominal"
+                 step="5" value="400" placeholder="Ej: 400" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="input-npanels">
+            Número de Paneles
+          </label>
+          <input type="number" class="form-input" id="input-npanels"
+                 step="1" value="50" min="1" placeholder="Ej: 50" />
+        </div>
+      </div>
+
+      <!-- Geometría -->
+      <h3 style="font-size:0.85rem;color:var(--accent-orange);text-transform:uppercase;letter-spacing:.06em;margin-bottom:1rem;">
+        📐 Geometría de Instalación
+      </h3>
+      <div class="form-grid" style="margin-bottom:1.5rem">
+        <div class="form-group">
+          <label class="form-label" for="tilt-angle">
+            Ángulo de Inclinación (Tilt) <span class="label-unit">[0° – 90°]</span>
+          </label>
+          <input type="range" class="form-range" id="tilt-angle"
+                 min="0" max="90" step="1" value="25" />
+          <div class="range-value" id="tilt-val">25°</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="input-azimuth">
+            Azimut del Panel <span class="label-unit">[° 0=N, 180=S]</span>
+          </label>
+          <input type="number" class="form-input" id="input-azimuth"
+                 step="1" value="180" min="0" max="360" placeholder="180" />
+        </div>
+      </div>
+
+      <div id="solar-alert"></div>
+
+      <button class="btn btn-primary btn-full" id="btn-solar" style="margin-top:1rem">
+        <span>☀️</span> Ejecutar Motor de Jensen — Calcular Sistema PV
+      </button>
+    </div>
+
+  </div>
+</section>
+
+<div class="section-divider-line"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECCIÓN 3: RESULTADOS
+════════════════════════════════════════════════════════════════════════════ -->
+<section id="resultados" class="section section-alt">
+  <div class="section-inner">
+    <div class="section-header fade-in">
+      <span class="section-tag tag-green">📊 Resultados</span>
+      <h2 class="section-title">Resultados del Motor Solar</h2>
+      <p class="section-desc">
+        KPIs, series temporales, balance energético y estadísticas completas del sistema.
+      </p>
+    </div>
+
+    <div id="solar-results">
+
+      <!-- KPI Cards -->
+      <div id="kpi-container" class="kpi-grid fade-in"></div>
+
+      <!-- Estadísticas clave -->
+      <div id="solar-stats-box" class="stats-summary fade-in" style="margin-bottom:2rem"></div>
+
+      <!-- Gráficas -->
+      <div class="charts-grid fade-in">
+        <div class="chart-container">
+          <div class="chart-title">Irradiancia POA Mensual Promedio [W/m²]</div>
+          <canvas id="chart-gtot-monthly" height="220"></canvas>
+        </div>
+        <div class="chart-container">
+          <div class="chart-title">Generación PV Mensual [kWh]</div>
+          <canvas id="chart-gen-monthly" height="220"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-container fade-in">
+        <div class="chart-title">Perfil Diario — Generación PV vs. Demanda (Promedio Verano)</div>
+        <canvas id="chart-daily-comp" height="140"></canvas>
+      </div>
+
+      <div class="chart-container fade-in">
+        <div class="chart-title">Balance Energético Mensual — Generación vs. Demanda</div>
+        <canvas id="chart-balance" height="180"></canvas>
+      </div>
+
+      <!-- Botón de descarga -->
+      <div style="text-align:center;margin-top:2rem" class="fade-in">
+        <button class="btn btn-primary" id="btn-download" style="padding:0.9rem 2.5rem;font-size:1rem">
+          <span>⬇️</span> Descargar CSV — Datos Anuales Completos (35,040 filas)
+        </button>
+        <p style="margin-top:0.75rem;font-size:0.8rem;color:var(--text-muted)">
+          El archivo incluye: Fecha-Hora, Irradiancia POA [W/m²], Generación PV [kW] y Demanda [kW]
+        </p>
+      </div>
+
+    </div>
+
+  </div>
+</section>
+
+<div class="section-divider-line"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     FOOTER
+════════════════════════════════════════════════════════════════════════════ -->
+<footer>
+  <p>
+    Motor Solar Fotovoltaico — Modelo de Jensen Simplificado &nbsp;·&nbsp;
+    Backend <a href="https://flask.palletsprojects.com/" target="_blank">Flask</a> (Python) &nbsp;·&nbsp;
+    Gráficas <a href="https://www.chartjs.org/" target="_blank">Chart.js</a> &nbsp;·&nbsp;
+    Rafael Alejandro Arvizu Jiménez · Tecnológico de Monterrey
+  </p>
+</footer>
+
+<!-- Scripts -->
+<script src="assets/js/solar_app.js"></script>
+
+</body>
+</html>
