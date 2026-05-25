@@ -1,7 +1,9 @@
 /**
  * solar_app.js
- * Lógica del frontend para el Motor Solar Fotovoltaico
- * Maneja: formularios, llamadas a la API Flask, Chart.js, animaciones
+ * Lógica del frontend para el Motor Solar Fotovoltaico.
+ * Ejecución 100% en el cliente (Browser-side / Serverless).
+ * Calcula el modelo matemático de Jensen, generación de demanda, KPIs y
+ * descargas de reportes multi-hoja de Excel de forma local e instantánea.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -27,10 +29,12 @@ const $ = id => document.getElementById(id);
 
 function showLoader(text = 'Calculando...') {
   const ol = $('loader-overlay');
-  ol.querySelector('.loader-text').textContent = text;
-  ol.classList.add('active');
+  if (ol) {
+    ol.querySelector('.loader-text').textContent = text;
+    ol.classList.add('active');
+  }
 }
-function hideLoader() { $('loader-overlay').classList.remove('active'); }
+function hideLoader() { if ($('loader-overlay')) $('loader-overlay').classList.remove('active'); }
 
 function showAlert(containerId, type, msg) {
   const el = $(containerId);
@@ -44,6 +48,179 @@ function showAlert(containerId, type, msg) {
 function formatNum(n, dec = 1) {
   if (n === null || n === undefined || isNaN(n)) return '—';
   return Number(n).toFixed(dec).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONVERSIONES Y CONSTANTES FÍSICAS DE JENSEN
+// ─────────────────────────────────────────────────────────────────────────────
+const DEG = Math.PI / 180.0;
+const GSC = 1367.0;  // Constante solar [W/m²]
+const RHO = 0.20;    // Albedo del suelo
+
+function _dayOfYear(month, day) {
+  const daysPerMonth = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  let sum = 0;
+  for (let i = 0; i < month; i++) sum += daysPerMonth[i];
+  return sum + day;
+}
+
+function _declination(n) {
+  return 23.45 * DEG * Math.sin(2.0 * Math.PI * (n - 81) / 365);
+}
+
+function _equationOfTime(n) {
+  const B = 2.0 * Math.PI * (n - 1) / 365;
+  return 229.18 * (0.000075 + 0.001868 * Math.cos(B) - 0.032077 * Math.sin(B)
+                   - 0.014615 * Math.cos(2 * B) - 0.04089 * Math.sin(2 * B));
+}
+
+function _hourAngle(hourSolar) {
+  return (hourSolar - 12.0) * 15.0 * DEG;
+}
+
+function _solarPosition(latRad, lonRad, n, hourStd, lonRefRad = 0.0) {
+  const delta = _declination(n);
+  const eot = _equationOfTime(n);
+  const hourSolar = hourStd + (4.0 * (lonRad - lonRefRad) / DEG + eot) / 60.0;
+  const omega = _hourAngle(hourSolar);
+
+  let sinAlpha = Math.sin(latRad) * Math.sin(delta) +
+                 Math.cos(latRad) * Math.cos(delta) * Math.cos(omega);
+  sinAlpha = Math.max(-1.0, Math.min(1.0, sinAlpha));
+  const alpha = Math.asin(sinAlpha);
+
+  const cosAlpha = Math.cos(alpha);
+  let azimuth = 0.0;
+  if (cosAlpha >= 1e-10) {
+    let cosAz = (Math.sin(delta) - Math.sin(latRad) * sinAlpha) / (Math.cos(latRad) * cosAlpha);
+    cosAz = Math.max(-1.0, Math.min(1.0, cosAz));
+    azimuth = Math.acos(cosAz);
+    if (Math.sin(omega) > 0) {
+      azimuth = 2.0 * Math.PI - azimuth;
+    }
+  }
+  return { alpha, azimuth };
+}
+
+function _airMass(alphaRad) {
+  if (alphaRad < 5.0 * DEG) return null;
+  return 1.0 / Math.sin(alphaRad);
+}
+
+function _irradianceHorizontal(alphaRad, n) {
+  if (alphaRad <= 5.0 * DEG) return { Gb_h: 0.0, Gd_h: 0.0 };
+
+  const Eo = 1.0 + 0.033 * Math.cos(2.0 * Math.PI * n / 365);
+  const G0 = GSC * Eo * Math.sin(alphaRad);
+
+  const AM = _airMass(alphaRad);
+  if (AM === null) return { Gb_h: 0.0, Gd_h: 0.0 };
+
+  const tau_b = Math.pow(0.7, Math.pow(AM, 0.678));
+  const Gb_h = G0 *  tau_b;
+  const Gd_h = G0 * (1.0 - tau_b) * 0.5;
+
+  return { Gb_h: Math.max(0.0, Gb_h), Gd_h: Math.max(0.0, Gd_h) };
+}
+
+function _angleOfIncidence(alphaRad, azimuthSunRad, tiltRad, azimuthPanelRad) {
+  const cosTheta = Math.sin(alphaRad) * Math.cos(tiltRad) +
+                   Math.cos(alphaRad) * Math.cos(azimuthSunRad - azimuthPanelRad) * Math.sin(tiltRad);
+  return Math.acos(Math.max(-1.0, Math.min(1.0, cosTheta)));
+}
+
+function _poaIrradiance(Gb_h, Gd_h, alphaRad, azimuthSunRad, tiltRad, azimuthPanelRad) {
+  if (alphaRad <= 5.0 * DEG) return 0.0;
+
+  const theta_i = _angleOfIncidence(alphaRad, azimuthSunRad, tiltRad, azimuthPanelRad);
+  const cosThetaI = Math.cos(theta_i);
+  let Gb_poa = 0.0;
+  if (cosThetaI > 0) {
+    const Rb = Math.sin(alphaRad) > 0.01 ? cosThetaI / Math.sin(alphaRad) : 0.0;
+    Gb_poa = Gb_h * Rb;
+  }
+  const Gd_poa = Gd_h * (1.0 + Math.cos(tiltRad)) / 2.0;
+  const Gr_poa = (Gb_h + Gd_h) * RHO * (1.0 - Math.cos(tiltRad)) / 2.0;
+  return Math.max(0.0, Gb_poa + Gd_poa + Gr_poa);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PERFILES DE DEMANDA INDUSTRIAL
+// ─────────────────────────────────────────────────────────────────────────────
+const PLANT_PROFILES = {
+  manufactura_ligera: {
+    name: 'Manufactura Ligera',
+    weekday: [
+      0.35, 0.33, 0.32, 0.32, 0.34, 0.60, 0.82, 0.95, 1.00, 1.00, 0.98, 0.72,
+      0.72, 0.96, 1.00, 1.00, 0.95, 0.78, 0.68, 0.65, 0.60, 0.55, 0.45, 0.38
+    ],
+    weekend: [
+      0.15, 0.14, 0.13, 0.13, 0.14, 0.20, 0.30, 0.42, 0.48, 0.48, 0.46, 0.40,
+      0.38, 0.42, 0.46, 0.44, 0.40, 0.35, 0.30, 0.25, 0.22, 0.20, 0.17, 0.15
+    ]
+  },
+  manufactura_pesada: {
+    name: 'Manufactura Pesada',
+    weekday: [
+      0.70, 0.68, 0.67, 0.66, 0.68, 0.75, 0.85, 0.95, 1.00, 1.00, 0.98, 0.95,
+      0.88, 0.95, 1.00, 1.00, 0.98, 0.95, 0.90, 0.85, 0.82, 0.80, 0.75, 0.72
+    ],
+    weekend: [
+      0.60, 0.58, 0.56, 0.55, 0.56, 0.60, 0.65, 0.70, 0.75, 0.75, 0.73, 0.70,
+      0.68, 0.70, 0.72, 0.70, 0.68, 0.65, 0.63, 0.62, 0.61, 0.60, 0.59, 0.60
+    ]
+  },
+  oficinas: {
+    name: 'Edificio de Oficinas',
+    weekday: [
+      0.12, 0.11, 0.11, 0.11, 0.12, 0.20, 0.45, 0.72, 0.90, 0.98, 1.00, 1.00,
+      0.90, 0.98, 1.00, 0.98, 0.90, 0.70, 0.45, 0.30, 0.22, 0.18, 0.15, 0.12
+    ],
+    weekend: [
+      0.10, 0.10, 0.10, 0.10, 0.10, 0.12, 0.15, 0.18, 0.20, 0.22, 0.22, 0.20,
+      0.18, 0.18, 0.18, 0.15, 0.14, 0.12, 0.11, 0.10, 0.10, 0.10, 0.10, 0.10
+    ]
+  },
+  almacen: {
+    name: 'Almacén',
+    weekday: [
+      0.20, 0.18, 0.18, 0.18, 0.20, 0.40, 0.65, 0.85, 0.95, 1.00, 1.00, 0.95,
+      0.88, 0.95, 1.00, 0.98, 0.92, 0.80, 0.60, 0.40, 0.32, 0.28, 0.24, 0.20
+    ],
+    weekend: [
+      0.18, 0.17, 0.17, 0.17, 0.18, 0.25, 0.35, 0.50, 0.60, 0.65, 0.65, 0.62,
+      0.58, 0.62, 0.65, 0.62, 0.55, 0.45, 0.35, 0.28, 0.24, 0.22, 0.20, 0.18
+    ]
+  },
+  data_center: {
+    name: 'Centro de Datos',
+    weekday: [
+      0.88, 0.87, 0.86, 0.86, 0.87, 0.89, 0.92, 0.96, 1.00, 1.00, 0.99, 0.98,
+      0.97, 0.98, 1.00, 1.00, 0.99, 0.98, 0.96, 0.94, 0.92, 0.91, 0.90, 0.89
+    ],
+    weekend: [
+      0.86, 0.85, 0.84, 0.84, 0.85, 0.86, 0.88, 0.90, 0.92, 0.93, 0.93, 0.92,
+      0.91, 0.91, 0.92, 0.91, 0.90, 0.89, 0.88, 0.87, 0.87, 0.86, 0.86, 0.86
+    ]
+  }
+};
+
+// Generador de números pseudoaleatorios con semilla (Mulberry32)
+function mulberry32(a) {
+  return function() {
+    let t = a += 0x6D2B79F5;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+}
+
+// Transformación Box-Muller para ruido Gaussiano normalizado
+function gaussianRandom(rnd) {
+  let u = 0, v = 0;
+  while (u === 0) u = rnd();
+  while (v === 0) v = rnd();
+  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,8 +259,167 @@ function destroyChart(key) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECCIÓN 1: PERFIL DE DEMANDA
+// CLIENT-SIDE: GENERACIÓN DE DEMANDA INDUSTRIAL
 // ─────────────────────────────────────────────────────────────────────────────
+function generateDemandProfile(Pmax_kW, FC_planta, FP_potencia, n_shifts, plant_type, weekend_op_factor, summer_boost) {
+  const rnd = mulberry32(42); // Semilla reproducible
+  
+  if (!PLANT_PROFILES[plant_type]) plant_type = 'manufactura_ligera';
+  const profile_data = PLANT_PROFILES[plant_type];
+
+  // Aplicar turnos de operación
+  const applyShifts = (profile, shifts) => {
+    const adj = [...profile];
+    if (shifts === 1) {
+      for (let h = 0; h < 24; h++) {
+        if (!(h >= 6 && h < 14)) adj[h] = profile[h] * 0.20;
+      }
+    } else if (shifts === 2) {
+      for (let h = 0; h < 24; h++) {
+        if (!(h >= 6 && h < 22)) adj[h] = profile[h] * 0.25;
+      }
+    }
+    return adj;
+  };
+
+  const profile_weekday = applyShifts(profile_data.weekday, n_shifts);
+  const profile_weekend_base = applyShifts(profile_data.weekend, n_shifts);
+
+  const N = 35040;
+  const demand = new Float64Array(N);
+  const days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const summer_months = new Set([4, 5, 6, 7, 8]); // Mayo a Septiembre (0-indexed: May=4, Jun=5...)
+
+  let idx = 0;
+  for (let month_idx = 0; month_idx < 12; month_idx++) {
+    const is_summer = summer_months.has(month_idx);
+    const season_factor = is_summer ? summer_boost : 1.0;
+    const n_days = days_in_month[month_idx];
+
+    let days_before = 0;
+    for (let m = 0; m < month_idx; m++) days_before += days_in_month[m];
+
+    for (let day = 0; day < n_days; day++) {
+      const day_of_year = days_before + day;
+      const weekday = day_of_year % 7; // Día 0 = Lunes ficticio
+      const is_weekend = weekday >= 5;
+
+      let base_profile;
+      if (is_weekend) {
+        base_profile = profile_weekend_base.map(v => v * weekend_op_factor);
+      } else {
+        base_profile = profile_weekday;
+      }
+
+      for (let interval = 0; interval < 96; interval++) {
+        const hour_of_day = Math.floor(interval / 4);
+        const frac = (interval % 4) / 4.0;
+        const next_h = (hour_of_day + 1) % 24;
+        const base = (1 - frac) * base_profile[hour_of_day] + frac * base_profile[next_h];
+
+        const p = Pmax_kW * base * FC_planta * season_factor;
+        const noise = 1.0 + gaussianRandom(rnd) * 0.04;
+        demand[idx] = Math.max(0.0, p * noise);
+        idx++;
+      }
+    }
+  }
+
+  // Escalar demanda máxima real para que coincida exactamente con Pmax_kW * FP_potencia
+  let max_val = 0;
+  for (let i = 0; i < N; i++) {
+    if (demand[i] > max_val) max_val = demand[i];
+  }
+  if (max_val > 0) {
+    const factor = (Pmax_kW * FP_potencia) / max_val;
+    for (let i = 0; i < N; i++) demand[i] *= factor;
+  }
+
+  // Agregaciones estadísticas
+  let sum_demand = 0;
+  let max_demand = 0;
+  let min_demand = Infinity;
+  for (let i = 0; i < N; i++) {
+    sum_demand += demand[i];
+    if (demand[i] > max_demand) max_demand = demand[i];
+    if (demand[i] < min_demand) min_demand = demand[i];
+  }
+
+  const energy_kwh = sum_demand * 0.25;
+  const p_media_kW = sum_demand / N;
+
+  // Cálculos mensuales
+  const monthly_avg = [];
+  const monthly_max = [];
+  const monthly_min = [];
+  const monthly_kWh = [];
+  idx = 0;
+  for (let month_idx = 0; month_idx < 12; month_idx++) {
+    const n_pts = days_in_month[month_idx] * 96;
+    let m_sum = 0, m_max = 0, m_min = Infinity;
+    for (let i = 0; i < n_pts; i++) {
+      const val = demand[idx + i];
+      m_sum += val;
+      if (val > m_max) m_max = val;
+      if (val < m_min) m_min = val;
+    }
+    monthly_avg.push(m_sum / n_pts);
+    monthly_max.push(m_max);
+    monthly_min.push(m_min);
+    monthly_kWh.push(m_sum * 0.25);
+    idx += n_pts;
+  }
+
+  // Perfil diario de 96 puntos (día laboral y fin de semana)
+  const daily_weekday = new Float64Array(96);
+  const daily_weekend = new Float64Array(96);
+  let cnt_w = 0, cnt_we = 0;
+  for (let d = 0; d < 365; d++) {
+    const offset = d * 96;
+    if (d % 7 < 5) {
+      for (let i = 0; i < 96; i++) daily_weekday[i] += demand[offset + i];
+      cnt_w++;
+    } else {
+      for (let i = 0; i < 96; i++) daily_weekend[i] += demand[offset + i];
+      cnt_we++;
+    }
+  }
+  for (let i = 0; i < 96; i++) {
+    if (cnt_w > 0) daily_weekday[i] /= cnt_w;
+    if (cnt_we > 0) daily_weekend[i] /= cnt_we;
+  }
+
+  const stats = {
+    pmax_kW: Pmax_kW,
+    p_media_kW: p_media_kW,
+    p_min_kW: min_demand,
+    p_max_real_kW: max_demand,
+    energia_anual_kWh: energy_kwh,
+    energia_anual_MWh: energy_kwh / 1000.0,
+    factor_carga_real: max_demand > 0 ? p_media_kW / max_demand : 0,
+    horas_punta_equiv: Pmax_kW > 0 ? energy_kwh / Pmax_kW : 0,
+    FC_planta: FC_planta,
+    FP_potencia: FP_potencia,
+    n_shifts: n_shifts,
+    plant_type: plant_type,
+    plant_name: profile_data.name,
+    weekend_op_factor: weekend_op_factor,
+    summer_boost: summer_boost,
+  };
+
+  return {
+    demand_kW: Array.from(demand),
+    hours: Array.from({length: N}, (_, i) => i * 0.25),
+    monthly_avg,
+    monthly_max,
+    monthly_min,
+    monthly_kWh,
+    daily_weekday: Array.from(daily_weekday),
+    daily_weekend: Array.from(daily_weekend),
+    stats
+  };
+}
+
 async function runDemand() {
   const Pmax          = parseFloat($('pmax-input')?.value ?? 50);
   const FC            = parseFloat($('fc-planta').value);
@@ -94,38 +430,28 @@ async function runDemand() {
   const summer_boost  = parseFloat($('summer-boost').value);
 
   showLoader('⚡ Generando perfil de demanda anual (35,040 puntos)...');
-  try {
-    const res = await fetch('/api/demand', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        pmax_kW          : Pmax,
-        fc_planta        : FC,
-        fp_potencia      : FP,
-        n_shifts         : n_shifts,
-        plant_type       : plant_type,
-        weekend_op_factor: weekend_op,
-        summer_boost     : summer_boost,
-      })
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error);
+  
+  // Pequeño retardo de UI para que pinte el loader antes del bloqueo por CPU
+  setTimeout(() => {
+    try {
+      const data = generateDemandProfile(Pmax, FC, FP, n_shifts, plant_type, weekend_op, summer_boost);
 
-    state.demandData = data;
-    renderDemandCharts(data);
-    renderDemandStats(data.stats);
-    $('demand-results').classList.remove('hidden');
-    $('demand-results').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    showAlert('demand-alert', 'success', `Perfil generado — ${data.stats.plant_name} · ${n_shifts} turno(s) · Pmax ${Pmax} kW`);
-  } catch (e) {
-    showAlert('demand-alert', 'error', `Error: ${e.message}`);
-  } finally {
-    hideLoader();
-  }
+      state.demandData = data;
+      renderDemandCharts(data);
+      renderDemandStats(data.stats);
+      $('demand-results').classList.remove('hidden');
+      $('demand-results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      showAlert('demand-alert', 'success', `Perfil generado localmente — ${data.stats.plant_name} · ${n_shifts} turno(s) · Pmax ${Pmax} kW`);
+    } catch (e) {
+      showAlert('demand-alert', 'error', `Error: ${e.message}`);
+      console.error(e);
+    } finally {
+      hideLoader();
+    }
+  }, 50);
 }
 
 function renderDemandCharts(data) {
-  // Gráfica 1: Demanda mensual promedio (barras)
   destroyChart('demandMonthly');
   state.charts.demandMonthly = new Chart($('chart-demand-monthly'), {
     type: 'bar',
@@ -165,7 +491,6 @@ function renderDemandCharts(data) {
     }
   });
 
-  // Gráfica 2: Perfil diario representativo (línea)
   destroyChart('demandDaily');
   state.charts.demandDaily = new Chart($('chart-demand-daily'), {
     type: 'line',
@@ -173,7 +498,7 @@ function renderDemandCharts(data) {
       labels: HOURS_96,
       datasets: [{
         label: 'Demanda típica día laboral [kW]',
-        data: data.daily_profile,
+        data: data.daily_weekday,
         borderColor: '#f97316',
         backgroundColor: 'rgba(249,115,22,0.08)',
         fill: true,
@@ -237,8 +562,170 @@ function renderDemandStats(stats) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECCIÓN 2: MOTOR SOLAR
+// CLIENT-SIDE: MOTOR SOLAR FOTOVOLTAICO (JENSEN)
 // ─────────────────────────────────────────────────────────────────────────────
+function runSolarEngine(lat, lon, alt, eta, area_m2, n_panels, tilt, azimuth, p_nominal_w) {
+  const lat_r = lat * DEG;
+  const lon_r = lon * DEG;
+  const tilt_r = tilt * DEG;
+  const azimuth_r = azimuth * DEG;
+
+  const alt_factor = Math.exp(-alt / 8500.0);
+
+  const N = 35040;
+  const Gtot_arr = new Float64Array(N);
+  const Gb_h_arr = new Float64Array(N);
+  const Gd_h_arr = new Float64Array(N);
+  const P_kw_arr = new Float64Array(N);
+
+  const days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+  let idx = 0;
+  for (let month_idx = 0; month_idx < 12; month_idx++) {
+    const n_days = days_in_month[month_idx];
+    for (let day = 1; day <= n_days; day++) {
+      const n = _dayOfYear(month_idx + 1, day);
+      for (let interval = 0; interval < 96; interval++) {
+        const hour_std = interval * 0.25 + 0.125;
+
+        // Posición solar real
+        const pos = _solarPosition(lat_r, lon_r, n, hour_std);
+
+        // Corrección de masa de aire por altitud
+        let alpha_eff = pos.alpha;
+        if (pos.alpha > 5.0 * DEG) {
+          alpha_eff = Math.asin(Math.max(-1.0, Math.min(1.0, Math.sin(pos.alpha) / alt_factor)));
+        }
+
+        // Irradiancias horizontales (Jensen)
+        const horiz = _irradianceHorizontal(alpha_eff, n);
+
+        // Irradiancia en Plano de Arreglo (POA transposición)
+        const Gtot = _poaIrradiance(horiz.Gb_h, horiz.Gd_h, alpha_eff, pos.azimuth, tilt_r, azimuth_r);
+
+        // Generación PV [kW] considerando pérdidas del sistema de 15% (Performance Ratio = 0.85)
+        const P_kw = (eta * area_m2 * Gtot * n_panels * 0.85) / 1000.0;
+
+        Gtot_arr[idx] = Gtot;
+        Gb_h_arr[idx] = horiz.Gb_h;
+        Gd_h_arr[idx] = horiz.Gd_h;
+        P_kw_arr[idx] = P_kw;
+        idx++;
+      }
+    }
+  }
+
+  // Agregaciones mensuales
+  const monthly_gtot_avg = [];
+  const monthly_gtot_max = [];
+  const monthly_gen_kWh = [];
+  idx = 0;
+  for (let month_idx = 0; month_idx < 12; month_idx++) {
+    const n_pts = days_in_month[month_idx] * 96;
+    let sum_g = 0, max_g = 0, sum_p = 0;
+    for (let i = 0; i < n_pts; i++) {
+      const g = Gtot_arr[idx + i];
+      const p = P_kw_arr[idx + i];
+      sum_g += g;
+      if (g > max_g) max_g = g;
+      sum_p += p;
+    }
+    monthly_gtot_avg.push(sum_g / n_pts);
+    monthly_gtot_max.push(max_g);
+    monthly_gen_kWh.push(sum_p * 0.25);
+    idx += n_pts;
+  }
+
+  // Perfiles horarios promedio en Verano (Mayo a Agosto)
+  let summer_start_day = 0;
+  for (let m = 0; m < 4; m++) summer_start_day += days_in_month[m];
+  let summer_end_day = summer_start_day;
+  for (let m = 4; m < 8; m++) summer_end_day += days_in_month[m];
+
+  const summer_start_idx = summer_start_day * 96;
+  const n_summer_days = summer_end_day - summer_start_day;
+
+  const daily_gtot_summer = new Float64Array(96);
+  const daily_p_summer = new Float64Array(96);
+  for (let d = 0; d < n_summer_days; d++) {
+    const offset = summer_start_idx + d * 96;
+    for (let i = 0; i < 96; i++) {
+      daily_gtot_summer[i] += Gtot_arr[offset + i];
+      daily_p_summer[i] += P_kw_arr[offset + i];
+    }
+  }
+  for (let i = 0; i < 96; i++) {
+    daily_gtot_summer[i] /= n_summer_days;
+    daily_p_summer[i] /= n_summer_days;
+  }
+
+  // Estadísticas globales
+  let sum_P = 0, max_P = 0, active_hours = 0;
+  let sum_GbGd = 0, sum_Gtot = 0, max_gtot = 0;
+  for (let i = 0; i < N; i++) {
+    sum_P += P_kw_arr[i];
+    if (P_kw_arr[i] > max_P) max_P = P_kw_arr[i];
+    if (P_kw_arr[i] > 0.001) active_hours += 0.25;
+
+    const horiz_total = Gb_h_arr[i] + Gd_h_arr[i];
+    sum_GbGd += horiz_total;
+    sum_Gtot += Gtot_arr[i];
+    if (Gtot_arr[i] > max_gtot) max_gtot = Gtot_arr[i];
+  }
+
+  const energia_anual_kwh = sum_P * 0.25;
+  const p_nominal_total_kw = (p_nominal_w * n_panels) / 1000.0;
+  const fc = p_nominal_total_kw > 0 ? energia_anual_kwh / (p_nominal_total_kw * 8760) : 0;
+  const hpse = p_nominal_total_kw > 0 ? energia_anual_kwh / p_nominal_total_kw : 0;
+  const irrad_horizontal_kwh_m2 = (sum_GbGd * 0.25) / 1000.0;
+  const irrad_poa_kwh_m2 = (sum_Gtot * 0.25) / 1000.0;
+
+  let sum_g_pos = 0, cnt_g_pos = 0;
+  for (let i = 0; i < N; i++) {
+    if (Gtot_arr[i] > 0) {
+      sum_g_pos += Gtot_arr[i];
+      cnt_g_pos++;
+    }
+  }
+  const gtot_media_W_m2 = cnt_g_pos > 0 ? sum_g_pos / cnt_g_pos : 0;
+
+  const stats = {
+    energia_anual_kWh: energia_anual_kwh,
+    energia_anual_MWh: energia_anual_kwh / 1000.0,
+    p_max_kW: max_P,
+    p_nominal_total_kW: p_nominal_total_kw,
+    factor_capacity_pct: fc * 100, // compatibilidad
+    factor_capacidad_pct: fc * 100,
+    horas_pico_sol_equiv: hpse,
+    irrad_horizontal_kWh_m2: irrad_horizontal_kwh_m2,
+    irrad_poa_kWh_m2: irrad_poa_kwh_m2,
+    gtot_max_W_m2: max_gtot,
+    gtot_media_W_m2: gtot_media_W_m2,
+    n_horas_generacion: active_hours,
+    n_paneles: n_panels,
+    potencia_nominal_W_panel: p_nominal_w,
+    eta: eta,
+    area_m2: area_m2,
+    tilt: tilt,
+    azimuth: azimuth,
+    lat: lat,
+    lon: lon,
+    alt: alt,
+  };
+
+  return {
+    Gtot_arr: Array.from(Gtot_arr),
+    P_kw_arr: Array.from(P_kw_arr),
+    hours: Array.from({length: N}, (_, i) => i * 0.25),
+    monthly_gtot_avg,
+    monthly_gtot_max,
+    monthly_gen_kWh,
+    daily_gtot_summer: Array.from(daily_gtot_summer),
+    daily_p_summer: Array.from(daily_p_summer),
+    stats
+  };
+}
+
 async function runSolar() {
   const payload = {
     lat:          parseFloat($('input-lat').value),
@@ -252,35 +739,91 @@ async function runSolar() {
     p_nominal_w:  parseFloat($('input-pnominal').value),
   };
 
-  // Validación básica
   if (isNaN(payload.lat) || isNaN(payload.lon)) {
     showAlert('solar-alert', 'error', 'Por favor ingresa latitud y longitud válidas.');
     return;
   }
 
-  showLoader('☀️ Ejecutando Motor de Jensen — 35,040 intervalos de 15 min...');
-  try {
-    const res = await fetch('/api/solar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error);
+  showLoader('☀️ Ejecutando Motor de Jensen en el navegador (35,040 pasos)...');
+  
+  setTimeout(() => {
+    try {
+      const data = runSolarEngine(
+        payload.lat, payload.lon, payload.alt,
+        payload.eta, payload.area_m2, payload.n_panels,
+        payload.tilt, payload.azimuth, payload.p_nominal_w
+      );
 
-    state.solarData = data;
-    renderSolarCharts(data);
-    renderSolarKPIs(data.stats, data.balance);
-    renderSolarStats(data.stats, data.balance);
-    $('solar-results').classList.remove('hidden');
-    $('solar-results').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    showAlert('solar-alert', 'success', 'Cálculo completado. Los resultados se muestran a continuación.');
-  } catch (e) {
-    showAlert('solar-alert', 'error', `Error en el cálculo: ${e.message}`);
-    console.error(e);
-  } finally {
-    hideLoader();
-  }
+      // Calcular balance si hay demanda guardada
+      let balance = null;
+      if (state.demandData) {
+        const dem_arr = state.demandData.demand_kW;
+        const gen_arr = data.P_kw_arr;
+        
+        let exceso_sum = 0, deficit_sum = 0, e_dem = 0, e_gen = 0;
+        const days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        
+        const monthly_balance = [];
+        const monthly_cobertura = [];
+        
+        let idx_m = 0;
+        for (let m = 0; m < 12; m++) {
+          const n_pts = days_in_month[m] * 96;
+          let m_eg = 0, m_ed = 0;
+          for (let i = 0; i < n_pts; i++) {
+            const gen = gen_arr[idx_m + i];
+            const dem = dem_arr[idx_m + i];
+            
+            m_eg += gen;
+            m_ed += dem;
+            
+            const diff = gen - dem;
+            if (diff > 0) exceso_sum += diff;
+            else deficit_sum += Math.abs(diff);
+          }
+          const eg_kwh = m_eg * 0.25;
+          const ed_kwh = m_ed * 0.25;
+          
+          monthly_balance.push(Number((eg_kwh - ed_kwh).toFixed(2)));
+          monthly_cobertura.push(Number((ed_kwh > 0 ? Math.min(eg_kwh / ed_kwh * 100, 100) : 0).toFixed(2)));
+          
+          e_gen += m_eg;
+          e_dem += m_ed;
+          idx_m += n_pts;
+        }
+
+        e_dem *= 0.25;
+        e_gen *= 0.25;
+        const cob = e_dem > 0 ? Math.min(e_gen / e_dem * 100, 100) : 0;
+
+        balance = {
+          energia_demanda_kWh: Number(e_dem.toFixed(2)),
+          energia_generada_kWh: Number(e_gen.toFixed(2)),
+          cobertura_pct: Number(cob.toFixed(2)),
+          exceso_kWh: Number((exceso_sum * 0.25).toFixed(2)),
+          deficit_kWh: Number((deficit_sum * 0.25).toFixed(2)),
+          monthly_balance,
+          monthly_cobertura
+        };
+      }
+
+      data.balance = balance;
+      state.solarData = data;
+      
+      renderSolarCharts(data);
+      renderSolarKPIs(data.stats, data.balance);
+      renderSolarStats(data.stats, data.balance);
+      
+      $('solar-results').classList.remove('hidden');
+      $('solar-results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      showAlert('solar-alert', 'success', 'Cálculo local completado. Resultados visualizados correctamente.');
+    } catch (e) {
+      showAlert('solar-alert', 'error', `Error en el cálculo: ${e.message}`);
+      console.error(e);
+    } finally {
+      hideLoader();
+    }
+  }, 50);
 }
 
 function renderSolarKPIs(stats, balance) {
@@ -294,17 +837,18 @@ function renderSolarKPIs(stats, balance) {
   ];
 
   const container = $('kpi-container');
-  container.innerHTML = kpis.map(k => `
-    <div class="kpi-card" style="--kpi-color:${k.color}">
-      <div class="kpi-value">${k.val}<span class="kpi-unit"> ${k.unit}</span></div>
-      <div class="kpi-label">${k.label}</div>
-    </div>`).join('');
+  if (container) {
+    container.innerHTML = kpis.map(k => `
+      <div class="kpi-card" style="--kpi-color:${k.color}">
+        <div class="kpi-value">${k.val}<span class="kpi-unit"> ${k.unit}</span></div>
+        <div class="kpi-label">${k.label}</div>
+      </div>`).join('');
+  }
 }
 
 function renderSolarCharts(data) {
   const { stats, balance } = data;
 
-  // Gráfica 1: Irradiancia POA mensual
   destroyChart('gtotMonthly');
   state.charts.gtotMonthly = new Chart($('chart-gtot-monthly'), {
     type: 'bar',
@@ -332,7 +876,6 @@ function renderSolarCharts(data) {
     }
   });
 
-  // Gráfica 2: Generación mensual kWh
   destroyChart('genMonthly');
   state.charts.genMonthly = new Chart($('chart-gen-monthly'), {
     type: 'bar',
@@ -356,8 +899,8 @@ function renderSolarCharts(data) {
     }
   });
 
-  // Gráfica 3: Perfil diario verano (generación + demanda si disponible)
-  destroyChart('dailyProfile');
+  // Re-dibujar comparación diaria
+  destroyChart('dailyComp');
   const datasets = [{
     label: 'Generación PV (verano promedio) [kW]',
     data: data.daily_p_summer,
@@ -371,7 +914,7 @@ function renderSolarCharts(data) {
   if (state.demandData) {
     datasets.push({
       label: 'Demanda industrial [kW]',
-      data: state.demandData.daily_profile,
+      data: state.demandData.daily_weekday,
       borderColor: '#f97316',
       backgroundColor: 'rgba(249,115,22,0.05)',
       fill: true,
@@ -381,7 +924,6 @@ function renderSolarCharts(data) {
       borderDash: [5, 3],
     });
   }
-  destroyChart('dailyComp');
   state.charts.dailyComp = new Chart($('chart-daily-comp'), {
     type: 'line',
     data: {
@@ -399,7 +941,7 @@ function renderSolarCharts(data) {
     }
   });
 
-  // Gráfica 4: Balance mensual (si hay demanda)
+  // Balance mensual
   if (balance) {
     destroyChart('balanceMonthly');
     state.charts.balanceMonthly = new Chart($('chart-balance'), {
@@ -416,10 +958,7 @@ function renderSolarCharts(data) {
           },
           {
             label: 'Demanda [kWh]',
-            data: state.demandData.monthly_avg.map((v, i) => {
-              const days = [31,28,31,30,31,30,31,31,30,31,30,31][i];
-              return v * days * 24;
-            }),
+            data: state.demandData.monthly_kWh,
             backgroundColor: 'rgba(249,115,22,0.5)',
             borderRadius: 3,
             stack: 'stack1',
@@ -521,14 +1060,186 @@ function renderSolarStats(stats, balance) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DESCARGA CSV
+// CLIENT-SIDE EXCEL EXPORT (CON SHEETJS / XLSX)
 // ─────────────────────────────────────────────────────────────────────────────
 function downloadExcel() {
   if (!state.solarData) {
     alert('Ejecuta primero el Motor Solar para generar los datos.');
     return;
   }
-  window.location.href = '/api/download/excel';
+  
+  showLoader('📊 Generando reporte Excel de alta fidelidad (35,040 filas)...');
+  
+  setTimeout(() => {
+    try {
+      const wb = XLSX.utils.book_new();
+      const s = state.solarData.stats;
+      const b = state.solarData.balance;
+
+      // ── Hoja 1: Parámetros ──
+      const paramData = [
+        ["Motor Solar Fotovoltaico — Parámetros de Simulación"],
+        [],
+        ["PARÁMETRO", "VALOR", "UNIDAD"],
+        ["SISTEMA FOTOVOLTAICO", "", ""],
+        ["Latitud", s.lat, "°"],
+        ["Longitud", s.lon, "°"],
+        ["Altitud del Sitio", s.alt, "m s.n.m."],
+        ["Eficiencia del Panel (η)", s.eta, "fracción"],
+        ["Área Frontal de un Panel", s.area_m2, "m²"],
+        ["Potencia Nominal Unitario", s.potencia_nominal_W_panel, "W"],
+        ["Cantidad de Módulos (N)", s.n_paneles, "paneles"],
+        ["Potencia Pico Total Instalada", s.p_nominal_total_kW, "kWp"],
+        ["Inclinación de Módulos (Tilt)", s.tilt, "°"],
+        ["Orientación Azimutal (Azimut)", s.azimuth, "° (Sur = 180°)"],
+        []
+      ];
+
+      if (state.demandData) {
+        const ds = state.demandData.stats;
+        paramData.push(
+          ["PERFIL DE DEMANDA INDUSTRIAL", "", ""],
+          ["Tipo de Planta/Industria", ds.plant_name, "—"],
+          ["Demanda Máxima Configurada (Pmax)", ds.pmax_kW, "kW"],
+          ["Turnos de Operación Diarios", ds.n_shifts, "turnos"],
+          ["Factor de Carga Teórico (FC)", ds.FC_planta, "fracción"],
+          ["Factor de Potencia de Planta (FP)", ds.FP_potencia, "—"],
+          ["Factor de Operación Fin de Semana", ds.weekend_op_factor, "fracción"],
+          ["Multiplicador de Consumo en Verano", ds.summer_boost, "multiplicador"]
+        );
+      }
+      const ws1 = XLSX.utils.aoa_to_sheet(paramData);
+      XLSX.utils.book_append_sheet(wb, ws1, "1. Parámetros");
+
+      // ── Hoja 2: KPIs Globales ──
+      const kpis = [
+        ["Métricas e Indicadores Clave de Rendimiento (KPIs)"],
+        [],
+        ["Métrica", "Valor", "Unidad", "Descripción"],
+        ["Energía PV Anual Generada", s.energia_anual_kWh, "kWh/año", "Generación eléctrica total acumulada en el año simulado."],
+        ["Factor de Capacidad Solar", s.factor_capacidad_pct, "%", "Aprovechamiento real del arreglo respecto a su potencia pico máxima."],
+        ["Potencia Máxima Instantánea Generada", s.p_max_kW, "kW", "Pico absoluto registrado de potencia generada."],
+        ["Irradiación Horizontal Anual", s.irrad_horizontal_kWh_m2, "kWh/m²", "Recurso solar total disponible en plano plano horizontal."],
+        ["Irradiación en Plano POA Anual", s.irrad_poa_kWh_m2, "kWh/m²", "Recurso solar captado por el plano inclinado de los módulos (modelo de Jensen)."],
+        ["Horas Pico Solar Equivalentes (HPSE)", s.horas_pico_sol_equiv, "horas/año", "Número de horas que el panel recibiría irradiancia constante de 1000 W/m²."],
+        ["Horas con Generación Activa", s.n_horas_generacion, "horas/año", "Cantidad de horas al año en las que la generación PV es mayor a cero."]
+      ];
+
+      if (b) {
+        kpis.push(
+          [],
+          ["INDICADORES DE ACOPLAMIENTO DE CARGA Y BALANCE", "", "", ""],
+          ["Energía Anual Consumida por Planta", b.energia_demanda_kWh, "kWh/año", "Consumo total de electricidad en el año."],
+          ["Porcentaje de Cobertura Solar Anual", b.cobertura_pct, "%", "Fracción de la demanda anual total cubierta por la generación solar."],
+          ["Exceso Solar Exportable", b.exceso_kWh, "kWh/año", "Energía generada que sobrepasa el consumo instantáneo de la planta."],
+          ["Déficit Neto de Red", b.deficit_kWh, "kWh/año", "Energía que no pudo ser suministrada por el sistema solar y debe comprarse a CFE."]
+        );
+      }
+      const ws2 = XLSX.utils.aoa_to_sheet(kpis);
+      XLSX.utils.book_append_sheet(wb, ws2, "2. KPIs de Rendimiento");
+
+      // ── Hoja 3: Resumen Mensual ──
+      const monthlyHeaders = ["Mes", "Irradiación POA Media [W/m²]", "Irradiación POA Max [W/m²]", "Generación PV [kWh]"];
+      if (state.demandData) {
+        monthlyHeaders.push("Consumo Planta [kWh]", "Balance Neto [kWh]", "Cobertura Mensual [%]");
+      }
+      const monthlyRows = [monthlyHeaders];
+      const MONTH_NAMES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+      
+      for (let m = 0; m < 12; m++) {
+        const row = [
+          MONTH_NAMES[m],
+          state.solarData.monthly_gtot_avg[m],
+          state.solarData.monthly_gtot_max[m],
+          state.solarData.monthly_gen_kWh[m]
+        ];
+        if (state.demandData) {
+          const days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m];
+          const dem_kwh = state.demandData.monthly_kWh[m];
+          row.push(dem_kwh, b.monthly_balance[m], b.monthly_cobertura[m]);
+        }
+        monthlyRows.push(row);
+      }
+      const ws3 = XLSX.utils.aoa_to_sheet(monthlyRows);
+      XLSX.utils.book_append_sheet(wb, ws3, "3. Resumen Mensual");
+
+      // ── Hoja 4: Perfil Diario Promedio en Verano ──
+      const dailyHeaders = ["Intervalo", "Hora", "Irradiación POA Promedio [W/m²]", "Generación PV Promedio [kW]"];
+      if (state.demandData) {
+        dailyHeaders.push("Demanda Industrial típica [kW]");
+      }
+      const dailyRows = [dailyHeaders];
+      for (let i = 0; i < 96; i++) {
+        const row = [
+          i + 1,
+          HOURS_96[i],
+          state.solarData.daily_gtot_summer[i],
+          state.solarData.daily_p_summer[i]
+        ];
+        if (state.demandData) {
+          row.push(state.demandData.daily_weekday[i]);
+        }
+        dailyRows.push(row);
+      }
+      const ws4 = XLSX.utils.aoa_to_sheet(dailyRows);
+      XLSX.utils.book_append_sheet(wb, ws4, "4. Perfil Diario Verano");
+
+      // ── Hoja 5: Datos Crudos Anuales (35,040 Filas) ──
+      const annualHeaders = ["Punto", "Fecha y Hora", "Día del Año", "Irradiación POA [W/m²]", "Generación PV [kW]"];
+      if (state.demandData) {
+        annualHeaders.push("Demanda Industrial [kW]", "Balance Solar - Demanda [kW]");
+      }
+      const annualRows = [annualHeaders];
+
+      const days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+      let idx = 0;
+      const base_dt = new Date(2024, 0, 1, 0, 0, 0); // Año bisiesto arbitrario para concordancia de días
+      
+      for (let m = 0; m < 12; m++) {
+        const n_days = days_in_month[m];
+        for (let d = 1; d <= n_days; d++) {
+          const doy = _dayOfYear(m + 1, d);
+          for (let interval = 0; interval < 96; interval++) {
+            const timestamp = new Date(base_dt.getTime() + idx * 15 * 60 * 1000);
+            
+            const formatStr = timestamp.getFullYear() + "-" + 
+                              String(timestamp.getMonth() + 1).padStart(2,'0') + "-" + 
+                              String(timestamp.getDate()).padStart(2,'0') + " " + 
+                              String(timestamp.getHours()).padStart(2,'0') + ":" + 
+                              String(timestamp.getMinutes()).padStart(2,'0');
+
+            const gtot = state.solarData.Gtot_arr[idx];
+            const p_pv = state.solarData.P_kw_arr[idx];
+
+            const row = [
+              idx + 1,
+              formatStr,
+              doy,
+              gtot,
+              p_pv
+            ];
+
+            if (state.demandData) {
+              const p_dem = state.demandData.demand_kW[idx];
+              row.push(p_dem, p_pv - p_dem);
+            }
+            annualRows.push(row);
+            idx++;
+          }
+        }
+      }
+      const ws5 = XLSX.utils.aoa_to_sheet(annualRows);
+      XLSX.utils.book_append_sheet(wb, ws5, "5. Datos Crudos Anuales");
+
+      // Guardar archivo Excel en el cliente de forma nativa e instantánea
+      XLSX.writeFile(wb, "Reporte_Simulacion_PV_Jensen_GDMTH.xlsx");
+    } catch (e) {
+      alert(`Error al generar Excel: ${e.message}`);
+      console.error(e);
+    } finally {
+      hideLoader();
+    }
+  }, 100);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -550,18 +1261,18 @@ function scrollTo(id) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INICIO
+// INICIO DE LA APLICACIÓN
 // ─────────────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initSliders();
   initScrollAnimations();
 
-  // Botones
+  // Botones de ejecución local
   $('btn-demand')?.addEventListener('click', runDemand);
   $('btn-solar')?.addEventListener('click', runSolar);
   $('btn-download')?.addEventListener('click', downloadExcel);
 
-  // Ocultar secciones de resultados hasta que se calculen
+  // Ocultar las secciones de resultados hasta que haya cómputos hechos
   ['demand-results', 'solar-results'].forEach(id => {
     const el = $(id);
     if (el) el.classList.add('hidden');
